@@ -87,7 +87,8 @@ $ grep -r "データベース" /path/to/docs/
 
 ## Requirements
 
-- Python 3.10 or higher
+- Python 3.10 or higher (less than 3.14)
+  - **Note**: Python 3.14 is not currently supported due to binary compatibility issues with the `sudachipy` dependency.
 - [uv](https://docs.astral.sh/uv/) (package manager)
 - [mise](https://mise.jdx.dev/) (optional, for development tool management)
 
@@ -196,6 +197,29 @@ Snippet: 吾輩は<b>猫</b>である...
 
 File: /path/to/other.txt
 Snippet: この<b>猫</b>は...
+```
+
+#### `delete_index`
+
+Deletes the index entries for files under the specified path (and its subdirectories).
+
+**Input:**
+```json
+{
+  "root_path": "/path/to/docs/subdir"
+}
+```
+
+#### `list_indexed_files`
+
+Returns a list of currently indexed files.
+
+**Input:**
+```json
+{
+  "limit": 10,
+  "offset": 0
+}
 ```
 
 ## Development
@@ -330,7 +354,7 @@ Pull requests are welcome! For major changes, please open an issue first to disc
 
 ### Python Version Issues
 
-This project supports Python 3.10 or higher. Use a version with available SudachiPy wheels.
+This project supports Python 3.10 or higher and less than 3.14. Please use a version where SudachiPy wheels are available (Python 3.14 is currently not supported). SudachiPy wheels.
 
 ```bash
 # Check current Python version

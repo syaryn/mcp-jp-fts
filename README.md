@@ -87,7 +87,8 @@ $ grep -r "データベース" /path/to/docs/
 
 ## 必要条件
 
-- Python 3.10 以上
+- Python 3.10 以上 3.14 未満
+  - **注意**: Python 3.14 は現在サポートされていません（依存ライブラリ `sudachipy` のバイナリ互換性のため）。
 - [uv](https://docs.astral.sh/uv/) (パッケージマネージャー)
 - [mise](https://mise.jdx.dev/) (オプション、開発ツール管理用)
 
@@ -196,6 +197,29 @@ Snippet: 吾輩は<b>猫</b>である...
 
 File: /path/to/other.txt
 Snippet: この<b>猫</b>は...
+```
+
+#### `delete_index`
+
+指定されたパス（およびそのサブディレクトリ）配下のインデックスを削除します。
+
+**入力例:**
+```json
+{
+  "root_path": "/path/to/docs/subdir"
+}
+```
+
+#### `list_indexed_files`
+
+インデックスされているファイルの一覧を返します。
+
+**入力例:**
+```json
+{
+  "limit": 10,
+  "offset": 0
+}
 ```
 
 ## 開発
@@ -330,7 +354,7 @@ mcp-jp-fts/
 
 ### Python バージョンの問題
 
-このプロジェクトは Python 3.10 以上をサポートしています。SudachiPy の wheel が利用可能なバージョンを使用してください。
+このプロジェクトは Python 3.10 以上 3.14 未満をサポートしています。SudachiPy の wheel が利用可能なバージョンを使用してください（Python 3.14 は現在未対応です）。
 
 ```bash
 # 現在の Python バージョンを確認
