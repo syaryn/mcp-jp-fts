@@ -98,7 +98,28 @@ $ grep -r "データベース" /path/to/docs/
 You can run this server directly from the GitHub repository:
 
 ```bash
-uvx --python "<3.14" --from git+https://github.com/syaryn/mcp-jp-fts mcp-jp-fts
+uvx --from git+https://github.com/syaryn/mcp-jp-fts mcp-jp-fts
+```
+
+### `claude_desktop_config.json` (Claude Desktop / Serena etc.)
+
+Add the following to your MCP client configuration file:
+
+```json
+{
+  "mcpServers": {
+    "mcp-jp-fts": {
+      "command": "uvx",
+      "args": [
+        "--python",
+        "<3.14",
+        "--from",
+        "git+https://github.com/syaryn/mcp-jp-fts",
+        "mcp-jp-fts"
+      ]
+    }
+  }
+}
 ```
 
 ### Local Development

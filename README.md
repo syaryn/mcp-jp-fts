@@ -98,7 +98,28 @@ $ grep -r "データベース" /path/to/docs/
 このサーバーは GitHub リポジトリから直接実行できます：
 
 ```bash
-uvx --python "<3.14" --from git+https://github.com/syaryn/mcp-jp-fts mcp-jp-fts
+uvx --from git+https://github.com/syaryn/mcp-jp-fts mcp-jp-fts
+```
+
+### `claude_desktop_config.json` (Claude Desktop / Serena など)
+
+MCP クライアントの設定ファイルに以下を追加してください：
+
+```json
+{
+  "mcpServers": {
+    "mcp-jp-fts": {
+      "command": "uvx",
+      "args": [
+        "--python",
+        "<3.14",
+        "--from",
+        "git+https://github.com/syaryn/mcp-jp-fts",
+        "mcp-jp-fts"
+      ]
+    }
+  }
+}
 ```
 
 ### ローカル開発の場合
