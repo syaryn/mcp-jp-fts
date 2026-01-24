@@ -1,0 +1,18 @@
+[tools]
+ruff = "latest"
+ty = "latest"
+uv = "latest"
+lefthook = "latest"
+osv-scanner = "latest"
+
+[tasks]
+dev = "uv run fastmcp dev server.py"
+start = "uv run server.py"
+test = "uv run pytest tests/"
+test-all = "uv run tox"
+lint = "uv run ruff check ."
+format = "uv run ruff format ."
+type = "uv run ty check ."
+check = { depends = ["lint", "type", "test"] }
+scan = "osv-scanner -r ."
+scan-license = "osv-scanner --licenses='BSD-3-Clause,Apache-2.0,MIT,PSF-2.0,MPL-2.0,ISC,BSD-2-Clause,Unlicense' -r ."

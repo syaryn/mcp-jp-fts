@@ -1,0 +1,59 @@
+[[PackageOverrides]]
+name = "beartype"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "chardet"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "colorama"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "docutils"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "lupa"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "py-key-value-aio"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "py-key-value-shared"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "pydocket"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "pyperclip"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "python-json-logger"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "pywin32"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "rpds-py"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "shellingham"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "uv"
+license.ignore = true
+
+[[PackageOverrides]]
+name = "wrapt"
+license.ignore = true

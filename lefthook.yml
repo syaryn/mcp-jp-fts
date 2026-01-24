@@ -1,0 +1,24 @@
+pre-commit:
+  parallel: true
+  commands:
+    lint:
+      glob: "*.py"
+      run: uv run ruff check {staged_files}
+    format:
+      glob: "*.py"
+      run: uv run ruff format --check {staged_files}
+    type:
+      glob: "*.py"
+      # Suppress ty errors on staged files check if complex, but good for quick check
+      # Note: ty output might be noisy, but let's try.
+      # Using 'check' on specific files might not work well if they depend on others.
+      # Safest to check whole project or skip strict staging for types.
+      # Let's check whole project for types to be safe.
+      run: uv run ty check .
+
+pre-push:
+  commands:
+    test:
+      run: uv run pytest tests/
+    scan:
+      run: osv-scanner -r .
