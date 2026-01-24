@@ -152,11 +152,21 @@ def delete_index(root_path: str) -> str:
 
 
 @mcp.tool()
-def search_documents(query: str, limit: int = 5, path_filter: str = None) -> List[str]:
+def search_documents(
+    query: str, 
+    limit: int = 5, 
+    path_filter: str = None, 
+    extensions: List[str] = None
+) -> List[str]:
     """
     Search for documents matching the Japanese query string.
-    Optionally filter by a root path.
-    Returns a list of matching file paths and snippets.
+    Optionally filter by a root path and/or file extensions.
+    
+    Args:
+        query: Japanese search query
+        limit: Max results to return
+        path_filter: Only return results under this path
+        extensions: List of file extensions to include (e.g., [".py", ".md"])
     """
     # Tokenize the query to match the indexed format
     query_tokens = tokenize(query)
@@ -179,6 +189,19 @@ def search_documents(query: str, limit: int = 5, path_filter: str = None) -> Lis
             
             sql += " AND (path = ? OR path LIKE ?)"
             params.extend([path_filter, filter_pattern])
+
+        if extensions:
+            # Construct OR clauses for extensions
+            # e.g. AND (path LIKE '%.py' OR path LIKE '%.md')
+            ext_clauses = []
+            for ext in extensions:
+                if not ext.startswith("."):
+                    ext = "." + ext
+                ext_clauses.append("path LIKE ?")
+                params.append(f"%{ext}")
+            
+            if ext_clauses:
+                sql += " AND (" + " OR ".join(ext_clauses) + ")"
 
         sql += " ORDER BY rank LIMIT ?"
         params.append(limit)

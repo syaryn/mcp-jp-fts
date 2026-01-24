@@ -213,3 +213,38 @@ def test_index_respects_gitignore(temp_db, resource_dir):
         assert "test.tmp" not in basenames
         assert "ignore_me.txt" not in basenames
         assert "wagahai.txt" in basenames # existing content
+
+
+def test_search_extension_filtering(temp_db, resource_dir):
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        # Create dummy files with different extensions
+        with open(os.path.join(resource_dir, "test.py"), "w") as f:
+            f.write("def func(): pass\n# 猫がいる")
+        with open(os.path.join(resource_dir, "test.md"), "w") as f:
+            f.write("# 猫について")
+        with open(os.path.join(resource_dir, "test.txt"), "w") as f:
+            f.write("猫のメモ")
+            
+        # Index
+        server.index_directory(resource_dir) # type: ignore
+        
+        query = "猫"
+        
+        # 1. Filter by .py
+        results_py = server.search_documents(query, extensions=[".py"]) # type: ignore
+        assert len(results_py) > 0
+        assert all(".py" in r for r in results_py)
+        assert not any(".md" in r for r in results_py)
+        assert not any(".txt" in r for r in results_py)
+        
+        # 2. Filter by .md
+        results_md = server.search_documents(query, extensions=["md"]) # type: ignore # test normalization
+        assert len(results_md) > 0
+        assert all(".md" in r for r in results_md)
+        
+        # 3. Filter by .py and .md
+        results_multi = server.search_documents(query, extensions=[".py", ".md"]) # type: ignore
+        assert len(results_multi) > 0
+        assert any(".py" in r for r in results_multi)
+        assert any(".md" in r for r in results_multi)
+        assert not any(".txt" in r for r in results_multi)
