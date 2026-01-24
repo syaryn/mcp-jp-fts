@@ -186,7 +186,8 @@ Searches indexed documents using SudachiPy tokenization.
 ```json
 {
   "query": "猫",
-  "limit": 5
+  "limit": 5,
+  "extensions": [".py", ".md"]
 }
 ```
 

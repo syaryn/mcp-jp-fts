@@ -34,6 +34,13 @@ def temp_db(tmp_path):
             tokenize='unicode61'
         );
     """)
+    conn.execute("""
+        CREATE TABLE documents_meta (
+            path TEXT PRIMARY KEY,
+            mtime REAL,
+            scanned_at REAL
+        );
+    """)
     conn.close()
     return str(db_file)
 

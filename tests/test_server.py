@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import time
 from unittest.mock import patch
 
 
@@ -49,6 +50,11 @@ def test_index_directory_clears_stale_data(temp_db, resource_dir):
             conn.execute(
                 "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
                 (stale_path, "stale content", "stale tokens"),
+            )
+            # Also insert into meta with old timestamp
+            conn.execute(
+                "INSERT INTO documents_meta (path, mtime, scanned_at) VALUES (?, ?, ?)",
+                (stale_path, 1000.0, 1000.0)
             )
             count = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
             assert count >= 3
@@ -248,3 +254,63 @@ def test_search_extension_filtering(temp_db, resource_dir):
         assert any(".py" in r for r in results_multi)
         assert any(".md" in r for r in results_multi)
         assert not any(".txt" in r for r in results_multi)
+
+        assert any(".md" in r for r in results_multi)
+        assert not any(".txt" in r for r in results_multi)
+
+def test_incremental_indexing(temp_db, tmp_path):
+    # Use a clean directory for this test
+    clean_dir = str(tmp_path / "clean_resources")
+    os.makedirs(clean_dir)
+    
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        file_a = os.path.join(clean_dir, "a.txt")
+        file_b = os.path.join(clean_dir, "b.txt")
+        
+        # 1. Initial State: a.txt, b.txt
+        with open(file_a, "w") as f: f.write("content A")
+        with open(file_b, "w") as f: f.write("content B")
+        
+        # Initial Index
+        res1 = server.index_directory(clean_dir) # type: ignore
+        assert "Indexed 2 files" in res1
+        
+        # 2. Modify State: 
+        # - a.txt: Modified
+        # - b.txt: Deleted
+        # - c.txt: Added
+        
+        time.sleep(1.1) # Ensure mtime changes significantly
+        with open(file_a, "w") as f: f.write("content A modified")
+        os.remove(file_b)
+        file_c = os.path.join(clean_dir, "c.txt")
+        with open(file_c, "w") as f: f.write("content C")
+        
+        # Incremental Index
+        res2 = server.index_directory(clean_dir) # type: ignore
+        
+        # Verify Output String
+        # Should be: Indexed 2 files (a and c), Skipped 0 files, Deleted 1 files (b)
+        # Wait... "Indexed" count includes updated(a) and new(c).
+        # "Skipped" should be 0 (no other files).
+        # "Deleted" should be 1 (b).
+        assert "Indexed 2" in res2
+        assert "Deleted 1" in res2
+        
+        # Verify DB Content
+        files = server.list_indexed_files() # type: ignore
+        basenames = [os.path.basename(f) for f in files]
+        
+        assert "a.txt" in basenames
+        assert "c.txt" in basenames
+        assert "b.txt" not in basenames
+        
+        # Verify Content Update
+        results = server.search_documents("modified") # type: ignore
+        assert any("a.txt" in r for r in results)
+        
+        # 3. No Change Scan
+        res3 = server.index_directory(clean_dir) # type: ignore
+        assert "Indexed 0" in res3
+        assert "Skipped 2" in res3 # a and c
+        assert "Deleted 0" in res3

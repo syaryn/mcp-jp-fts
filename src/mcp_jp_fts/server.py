@@ -1,6 +1,7 @@
 import contextlib
 import os
 import sqlite3
+import time
 from typing import List
 
 from fastmcp import FastMCP
@@ -46,6 +47,15 @@ def init_db():
                 tokenize='unicode61' 
             );
         """)
+        
+        # Meta table for incremental indexing
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS documents_meta (
+                path TEXT PRIMARY KEY,
+                mtime REAL,
+                scanned_at REAL
+            );
+        """)
         # Note: 'unicode61' is the default tokenizer which works well with space-separated tokens
 
 
@@ -60,20 +70,12 @@ def index_directory(root_path: str) -> str:
 
     WARNING: This will remove all existing index entries that start with this root_path before re-indexing.
     """
-    root_path = os.path.abspath(root_path)
-    if not os.path.exists(root_path):
-        return f"Error: Path {root_path} does not exist."
-
-    count = 0
+    current_time = time.time()
+    updated_count = 0
+    skipped_count = 0
+    
     with get_db() as conn:
-        # Atomic Transaction
-        with conn:  # Context manager handles transaction
-            # 1. Clear stale data
-            conn.execute(
-                "DELETE FROM documents_fts WHERE path LIKE ? || '%'", (root_path,)
-            )
-
-            # 2. Walk and Index
+        with conn:
             # Load .gitignore if exists
             gitignore_path = os.path.join(root_path, ".gitignore")
             ignore_spec = None
@@ -86,43 +88,91 @@ def index_directory(root_path: str) -> str:
 
             for dirpath, _, filenames in os.walk(root_path):
                 for filename in filenames:
-                    # Skip hidden files
                     if filename.startswith("."):
                         continue
                     
                     file_path = os.path.join(dirpath, filename)
                     
-                    # Check .gitignore
                     if ignore_spec:
                         rel_path = os.path.relpath(file_path, root_path)
                         if ignore_spec.match_file(rel_path):
                             continue
 
-
-                    file_path = os.path.join(dirpath, filename)
-
                     try:
-                        # Simple text check: try reading snippets to detect binary
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            content = f.read()  # Read full content for indexing
+                        # Get file mtime
+                        file_mtime = os.path.getmtime(file_path)
+                        
+                        # Check if update needed
+                        row = conn.execute(
+                            "SELECT mtime FROM documents_meta WHERE path = ?", 
+                            (file_path,)
+                        ).fetchone()
+                        
+                        needs_update = True
+                        if row:
+                            db_mtime = row[0]
+                            if file_mtime <= db_mtime:
+                                needs_update = False
+                        
+                        if needs_update:
+                            # 1. Read and Tokenize
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                content = f.read()
+                            
+                            tokens = tokenize(content)
+                            
+                            # 2. Update FTS (Delete old entry if exists, then Insert)
+                            conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
+                            conn.execute(
+                                "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
+                                (file_path, content, tokens),
+                            )
+                            updated_count += 1
+                        else:
+                            skipped_count += 1
 
-                        # Tokenize
-                        tokens = tokenize(content)
-
-                        # Insert
+                        # 3. Update Metadata (mtime and scanned_at)
                         conn.execute(
-                            "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
-                            (file_path, content, tokens),
+                            """
+                            INSERT INTO documents_meta (path, mtime, scanned_at) 
+                            VALUES (?, ?, ?)
+                            ON CONFLICT(path) DO UPDATE SET
+                                mtime = excluded.mtime,
+                                scanned_at = excluded.scanned_at
+                            """,
+                            (file_path, file_mtime, current_time)
                         )
-                        count += 1
 
                     except UnicodeDecodeError:
-                        # Skip binary/non-utf8 files
                         continue
                     except Exception as e:
-                        print(f"Failed to index {file_path}: {e}")
+                        print(f"Failed to process {file_path}: {e}")
 
-    return f"Indexed {count} files in {root_path} (Previous entries cleared)."
+            # 4. Cleanup Stale Entries
+            # Delete files under root_path that were NOT scanned in this pass
+            # (scanned_at < current_time)
+            
+            # Prepare LIKE pattern for root_path
+            search_pattern = root_path if root_path.endswith(os.sep) else root_path + os.sep
+            search_pattern = search_pattern + "%"
+            
+            # Find stale paths
+            cursor = conn.execute(
+                """
+                SELECT path FROM documents_meta 
+                WHERE (path = ? OR path LIKE ?) AND scanned_at < ?
+                """,
+                (root_path, search_pattern, current_time)
+            )
+            stale_paths = [r[0] for r in cursor]
+            
+            for path in stale_paths:
+                conn.execute("DELETE FROM documents_fts WHERE path = ?", (path,))
+                conn.execute("DELETE FROM documents_meta WHERE path = ?", (path,))
+            
+            deleted_count = len(stale_paths)
+
+    return f"Indexed {updated_count} files, Skipped {skipped_count} unchanged, Deleted {deleted_count} stale in {root_path}."
 
 
 @mcp.tool()
@@ -146,9 +196,14 @@ def delete_index(root_path: str) -> str:
                 "DELETE FROM documents_fts WHERE path = ? OR path LIKE ?", 
                 (root_path, search_pattern)
             )
-            deleted_count = cursor.rowcount
+            deleted_fts = cursor.rowcount
 
-    return f"Deleted {deleted_count} documents under {root_path}"
+            cursor = conn.execute(
+                "DELETE FROM documents_meta WHERE path = ? OR path LIKE ?", 
+                (root_path, search_pattern)
+            )
+            
+            return f"Deleted {deleted_fts} documents under {root_path}"
 
 
 @mcp.tool()
