@@ -91,16 +91,26 @@ $ grep -r "データベース" /path/to/docs/
 - [uv](https://docs.astral.sh/uv/) (パッケージマネージャー)
 - [mise](https://mise.jdx.dev/) (オプション、開発ツール管理用)
 
-## インストール
+## インストールと実行
 
-### 1. リポジトリのクローン
+### `uvx` を使用する場合 (推奨)
+
+このサーバーは GitHub リポジトリから直接実行できます：
 
 ```bash
-git clone <repository_url>
+uvx --from git+https://github.com/syaryn/mcp-jp-fts mcp-jp-fts
+```
+
+### ローカル開発の場合
+
+#### 1. リポジトリのクローン
+
+```bash
+git clone https://github.com/syaryn/mcp-jp-fts.git
 cd mcp-jp-fts
 ```
 
-### 2. 依存関係のインストール
+#### 2. 依存関係のインストール
 
 ```bash
 uv sync
@@ -113,15 +123,15 @@ uv sync
 #### 開発モード（ホットリロード付き）
 
 ```bash
-uv run fastmcp dev server.py
+uv run fastmcp dev src/mcp_jp_fts/server.py
 # または
 mise run dev
 ```
 
-#### 本番モード
+#### 本番モード（ローカルインストール済みの場合）
 
 ```bash
-uv run server.py
+uv run mcp-jp-fts
 # または
 mise run start
 ```
@@ -265,7 +275,9 @@ mise run test-all
 
 ```
 mcp-jp-fts/
-├── server.py              # FastMCP サーバーのメイン実装
+├── src/
+│   └── mcp_jp_fts/
+│       └── server.py      # FastMCP サーバーのメイン実装
 ├── tests/
 │   ├── test_server.py     # サーバー機能のテスト
 │   └── resources/         # テスト用リソース（サンプルテキストファイル）

@@ -11,9 +11,11 @@ from sudachipy import dictionary, tokenizer
 def tokenizer_obj():
     return dictionary.Dictionary().create()
 
+
 @pytest.fixture(scope="session")
 def split_mode():
     return tokenizer.Tokenizer.SplitMode.A
+
 
 @pytest.fixture
 def temp_db(tmp_path):
@@ -22,7 +24,7 @@ def temp_db(tmp_path):
     Returns the path to the DB file.
     """
     db_file = tmp_path / "test_documents.db"
-    
+
     conn = sqlite3.connect(db_file)
     conn.execute("""
         CREATE VIRTUAL TABLE documents_fts USING fts5(
@@ -34,6 +36,7 @@ def temp_db(tmp_path):
     """)
     conn.close()
     return str(db_file)
+
 
 @pytest.fixture
 def resource_dir(tmp_path):

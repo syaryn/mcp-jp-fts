@@ -6,8 +6,8 @@ lefthook = "latest"
 osv-scanner = "latest"
 
 [tasks]
-dev = "uv run fastmcp dev server.py"
-start = "uv run server.py"
+dev = "uv run fastmcp dev src/mcp_jp_fts/server.py"
+start = "uv run mcp-jp-fts"
 test = "uv run pytest tests/"
 test-all = "uv run tox"
 lint = "uv run ruff check ."
