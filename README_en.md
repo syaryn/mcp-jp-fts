@@ -98,7 +98,7 @@ $ grep -r "データベース" /path/to/docs/
 You can run this server directly from the GitHub repository:
 
 ```bash
-uvx --from git+https://github.com/syaryn/mcp-jp-fts mcp-jp-fts
+uvx --python "<3.14" --from git+https://github.com/syaryn/mcp-jp-fts mcp-jp-fts
 ```
 
 ### Local Development

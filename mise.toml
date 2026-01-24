@@ -4,6 +4,7 @@ ty = "latest"
 uv = "latest"
 lefthook = "latest"
 osv-scanner = "latest"
+python = "3.13"
 
 [tasks]
 dev = "uv run fastmcp dev src/mcp_jp_fts/server.py"

@@ -98,7 +98,7 @@ $ grep -r "データベース" /path/to/docs/
 このサーバーは GitHub リポジトリから直接実行できます：
 
 ```bash
-uvx --from git+https://github.com/syaryn/mcp-jp-fts mcp-jp-fts
+uvx --python "<3.14" --from git+https://github.com/syaryn/mcp-jp-fts mcp-jp-fts
 ```
 
 ### ローカル開発の場合
