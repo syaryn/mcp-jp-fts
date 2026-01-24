@@ -106,38 +106,64 @@ def index_directory(root_path: str) -> str:
 
 
 @mcp.tool()
-def search_documents(query: str, limit: int = 5) -> List[str]:
+def delete_index(root_path: str) -> str:
+    """
+    Delete all indexed documents under the specified root path.
+    """
+    root_path = os.path.abspath(root_path)
+
+    context_manager = get_db()
+    with context_manager as conn:
+        with conn:
+            # Using LIKE 'root_path%' to match all subpaths
+            # Ensure directory separator is included to avoid partial matches on directory names
+            # e.g. /tmp/test matching /tmp/testing
+            search_pattern = root_path if root_path.endswith(os.sep) else root_path + os.sep
+            search_pattern = search_pattern + "%"
+            
+            # Also match the exact root path if it's a file
+            cursor = conn.execute(
+                "DELETE FROM documents_fts WHERE path = ? OR path LIKE ?", 
+                (root_path, search_pattern)
+            )
+            deleted_count = cursor.rowcount
+
+    return f"Deleted {deleted_count} documents under {root_path}"
+
+
+@mcp.tool()
+def search_documents(query: str, limit: int = 5, path_filter: str = None) -> List[str]:
     """
     Search for documents matching the Japanese query string.
+    Optionally filter by a root path.
     Returns a list of matching file paths and snippets.
     """
     # Tokenize the query to match the indexed format
     query_tokens = tokenize(query)
-
-    # Simple formatting for FTS5 match: quote phrases or simple AND logic
-    # Here we just use the space-separated tokens which implies implicit AND/phrase depending on query syntax
-    # For robustness, we can wrap in quotes "..." to treat as phrase or leave as is.
-    # Let's treat it as a standard full-text query.
-    fts_query = f'"{query_tokens}"'  # Phrase search for exact sequence of tokens might be too strict?
-    # Let's try simple space separation which means AND in FTS5 usually (or OR check docs, standard is implicit AND)
-    # Actually FTS5 standard syntax: space is implicit AND.
-    # But since we space-separated the content ourselves, "A B C" in content matches "A AND B AND C".
-    # If user query creates "A B", we want to find docs with A and B.
-
     fts_query = query_tokens
 
     results = []
     with get_db() as conn:
-        cursor = conn.execute(
-            """
+        sql = """
             SELECT path, snippet(documents_fts, 1, '<b>', '</b>', '...', 64) 
             FROM documents_fts 
             WHERE tokens MATCH ? 
-            ORDER BY rank 
-            LIMIT ?
-        """,
-            (fts_query, limit),
-        )
+        """
+        params = [fts_query]
+
+        if path_filter:
+            path_filter = os.path.abspath(path_filter)
+            # Ensure proper separator for directory matching
+            filter_pattern = path_filter if path_filter.endswith(os.sep) else path_filter + os.sep
+            filter_pattern = filter_pattern + "%"
+            
+            sql += " AND (path = ? OR path LIKE ?)"
+            params.extend([path_filter, filter_pattern])
+
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
+
+        cursor = conn.execute(sql, params)
 
         for row in cursor:
             results.append(f"File: {row[0]}\nSnippet: {row[1]}\n")
@@ -146,6 +172,21 @@ def search_documents(query: str, limit: int = 5) -> List[str]:
         return ["No matches found."]
 
     return results
+
+
+@mcp.tool()
+def list_indexed_files(limit: int = 100, offset: int = 0) -> List[str]:
+    """
+    List paths of all indexed files with pagination.
+    """
+    with get_db() as conn:
+        cursor = conn.execute(
+            "SELECT path FROM documents_fts ORDER BY path LIMIT ? OFFSET ?",
+            (limit, offset)
+        )
+        files = [row[0] for row in cursor]
+    
+    return files
 
 
 def main():

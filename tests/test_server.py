@@ -56,10 +56,10 @@ def test_index_directory_clears_stale_data(temp_db, resource_dir):
         # 3. Re-index
         result = server.index_directory(resource_dir)  # type: ignore
 
-        # 4. Verify stale data is gone
+            # 4. Verify stale data is gone
         with sqlite3.connect(temp_db) as conn:
             count = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
-            assert count == 2
+            assert count == 4
 
             rows = conn.execute("SELECT path FROM documents_fts").fetchall()
             paths = [r[0] for r in rows]
@@ -89,3 +89,97 @@ def test_search_tokenization(temp_db, resource_dir):
         results = server.search_documents("トンネル")  # type: ignore
         assert len(results) > 0
         assert any("yukiguni.txt" in r for r in results)
+
+
+def test_delete_index(temp_db, resource_dir):
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        # Index everything
+        server.index_directory(resource_dir) # type: ignore
+        
+        # Verify indexed
+        with sqlite3.connect(temp_db) as conn:
+             count_before = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
+             assert count_before >= 2
+
+        # Delete from a specific subdirectory (if we had one) or the whole thing
+        # Let's delete the whole resource_dir
+        result = server.delete_index(resource_dir) # type: ignore
+        assert "Deleted" in result
+
+        # Verify empty
+        with sqlite3.connect(temp_db) as conn:
+             count_after = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
+             assert count_after == 0
+
+
+def test_search_documents_with_filter(temp_db, resource_dir):
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        server.index_directory(resource_dir) # type: ignore
+        
+        # Test query "猫" (exists in root wagahai.txt)
+        query = "猫"
+        
+        # 1. Filter with root path should return results (recursive)
+        results = server.search_documents(query, path_filter=resource_dir) # type: ignore
+        assert len(results) > 0
+        assert any("wagahai.txt" in r for r in results)
+        
+        # 2. Filter with non-matching path should return no results
+        dummy_path = os.path.join(os.path.dirname(resource_dir), "non_existent_dir")
+        results = server.search_documents(query, path_filter=dummy_path) # type: ignore
+        assert results == ["No matches found."]
+        
+        # 3. Test subdirectory filtering
+        # "カムパネルラ" is in subdir1/ginga.txt
+        # "先生" is in subdir2/kokoro.txt
+        
+        # Search for "カムパネルラ" with filter=subdir1 -> should find
+        subdir1 = os.path.join(resource_dir, "subdir1")
+        results = server.search_documents("カムパネルラ", path_filter=subdir1) # type: ignore
+        assert len(results) > 0
+        assert any("ginga.txt" in r for r in results)
+        
+        # Search for "カムパネルラ" with filter=subdir2 -> should NOT find
+        subdir2 = os.path.join(resource_dir, "subdir2")
+        results = server.search_documents("カムパネルラ", path_filter=subdir2) # type: ignore
+        assert results == ["No matches found."]
+
+def test_delete_index_subdirectory(temp_db, resource_dir):
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        server.index_directory(resource_dir) # type: ignore
+        
+        subdir1 = os.path.join(resource_dir, "subdir1")
+        
+        # Verify subdir1 content is indexed
+        results = server.search_documents("カムパネルラ") # type: ignore
+        assert any("ginga.txt" in r for r in results)
+        
+        # Delete only subdir1 index
+        server.delete_index(subdir1) # type: ignore
+        
+        # Verify subdir1 content is gone
+        results = server.search_documents("カムパネルラ") # type: ignore
+        assert results == ["No matches found."]
+        
+        # Verify other content still exists (e.g. root files or subdir2)
+        results = server.search_documents("先生") # type: ignore (in subdir2)
+        assert any("kokoro.txt" in r for r in results)
+
+
+def test_list_indexed_files(temp_db, resource_dir):
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        server.index_directory(resource_dir) # type: ignore
+        
+        files = server.list_indexed_files() # type: ignore
+        assert len(files) >= 4 # wagahai, yukiguni, ginga, kokoro
+        
+        # Check presence of all files including subdirs
+        basenames = [os.path.basename(f) for f in files]
+        assert "wagahai.txt" in basenames
+        assert "yukiguni.txt" in basenames
+        assert "ginga.txt" in basenames
+        assert "kokoro.txt" in basenames
+        
+        # Pagination check
+        files_limited = server.list_indexed_files(limit=1) # type: ignore
+        assert len(files_limited) == 1
