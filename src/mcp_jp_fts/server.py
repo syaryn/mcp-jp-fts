@@ -287,6 +287,58 @@ def list_indexed_files(limit: int = 100, offset: int = 0) -> List[str]:
     return files
 
 
+@mcp.tool()
+def update_file(file_path: str) -> str:
+    """
+    Update the index for a single file.
+    If the file exists, it is re-indexed.
+    If the file does not exist, it is removed from the index.
+    """
+    file_path = os.path.abspath(file_path)
+    current_time = time.time()
+    
+    with get_db() as conn:
+        with conn:
+            if not os.path.exists(file_path):
+                # File deleted
+                conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
+                conn.execute("DELETE FROM documents_meta WHERE path = ?", (file_path,))
+                return f"Removed {file_path} from index."
+            
+            try:
+                # 1. Read and Tokenize
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                
+                tokens = tokenize(content)
+                
+                # 2. Update FTS
+                conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
+                conn.execute(
+                    "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
+                    (file_path, content, tokens),
+                )
+                
+                # 3. Update Metadata
+                file_mtime = os.path.getmtime(file_path)
+                conn.execute(
+                    """
+                    INSERT INTO documents_meta (path, mtime, scanned_at) 
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        mtime = excluded.mtime,
+                        scanned_at = excluded.scanned_at
+                    """,
+                    (file_path, file_mtime, current_time)
+                )
+                return f"Updated {file_path} in index."
+
+            except UnicodeDecodeError:
+                return f"Skipped binary/non-utf8 file: {file_path}"
+            except Exception as e:
+                return f"Failed to update {file_path}: {e}"
+
+
 def main():
     mcp.run()
 

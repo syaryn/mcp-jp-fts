@@ -314,3 +314,34 @@ def test_incremental_indexing(temp_db, tmp_path):
         assert "Indexed 0" in res3
         assert "Skipped 2" in res3 # a and c
         assert "Deleted 0" in res3
+
+
+def test_update_file(temp_db, tmp_path):
+    clean_dir = str(tmp_path / "update_resources")
+    os.makedirs(clean_dir)
+    
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        file_a = os.path.join(clean_dir, "a.txt")
+        with open(file_a, "w") as f: f.write("initial content")
+        
+        # 1. Initial Index
+        server.index_directory(clean_dir) # type: ignore
+        
+        # 2. Modify File & Update Single File
+        with open(file_a, "w") as f: f.write("updated content")
+        res = server.update_file(file_a) # type: ignore
+        assert "Updated" in res
+        
+        # Verify Search
+        results = server.search_documents("updated") # type: ignore
+        assert len(results) == 1
+        assert "a.txt" in results[0]
+        
+        # 3. Delete File & Update Single File
+        os.remove(file_a)
+        res_del = server.update_file(file_a) # type: ignore
+        assert "Removed" in res_del
+        
+        # Verify Gone
+        files = server.list_indexed_files() # type: ignore
+        assert len(files) == 0
