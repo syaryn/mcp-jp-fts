@@ -345,3 +345,39 @@ def test_update_file(temp_db, tmp_path):
         # Verify Gone
         files = server.list_indexed_files() # type: ignore
         assert len(files) == 0
+
+
+def test_watch_mode(temp_db, tmp_path):
+    clean_dir = str(tmp_path / "watch_resources")
+    os.makedirs(clean_dir)
+    
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        # Start watching
+        res = server.watch_directory(clean_dir) # type: ignore
+        assert "Started watching" in res
+        
+        # 1. Create File
+        file_a = os.path.join(clean_dir, "watch_me.txt")
+        with open(file_a, "w") as f: f.write("I am being watched")
+        
+        # Wait for watchdog (it might take a moment)
+        time.sleep(2)
+        
+        # Verify Search
+        results = server.search_documents("watched") # type: ignore
+        assert len(results) > 0
+        assert "watch_me.txt" in results[0]
+        
+        # 2. Modify File
+        with open(file_a, "w") as f: f.write("I changed")
+        time.sleep(2)
+        
+        # Verify Search Update
+        results2 = server.search_documents("changed") # type: ignore
+        assert len(results2) > 0
+        assert "watch_me.txt" in results2[0]
+        
+        # Stop observer? server.observer is global.
+        # We can explicitly stop it to be clean, though pytest teardown handles it.
+        server.observer.stop()
+        server.observer.join()

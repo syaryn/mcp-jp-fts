@@ -10,6 +10,7 @@ dependencies = [
     "pytest>=9.0.2",
     "sudachidict-core>=20260116",
     "sudachipy>=0.6.10",
+    "watchdog>=4.0.0",
 ]
 
 [project.scripts]

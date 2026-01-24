@@ -7,6 +7,8 @@ from typing import List
 from fastmcp import FastMCP
 import pathspec
 from sudachipy import dictionary, tokenizer
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # Initialize FastMCP server
 mcp = FastMCP("mcp-jp-fts")
@@ -60,7 +62,92 @@ def init_db():
 
 
 # Initialize DB on startup
+# Initialize DB on startup
 init_db()
+
+# Global Observer for Watch Mode
+observer = Observer()
+
+def _update_or_remove_file(file_path: str) -> str:
+    """Internal helper to update or remove a file from index."""
+    file_path = os.path.abspath(file_path)
+    current_time = time.time()
+    
+    with get_db() as conn:
+        with conn:
+            if not os.path.exists(file_path):
+                # File deleted
+                conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
+                conn.execute("DELETE FROM documents_meta WHERE path = ?", (file_path,))
+                return f"Removed {file_path} from index."
+            
+            try:
+                # 1. Read and Tokenize
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                
+                tokens = tokenize(content)
+                
+                # 2. Update FTS
+                conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
+                conn.execute(
+                    "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
+                    (file_path, content, tokens),
+                )
+                
+                # 3. Update Metadata
+                file_mtime = os.path.getmtime(file_path)
+                conn.execute(
+                    """
+                    INSERT INTO documents_meta (path, mtime, scanned_at) 
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        mtime = excluded.mtime,
+                        scanned_at = excluded.scanned_at
+                    """,
+                    (file_path, file_mtime, current_time)
+                )
+                return f"Updated {file_path} in index."
+
+            except UnicodeDecodeError:
+                return f"Skipped binary/non-utf8 file: {file_path}"
+            except Exception as e:
+                return f"Failed to update {file_path}: {e}"
+
+
+class FTSHandler(FileSystemEventHandler):
+    def __init__(self, root_path, ignore_spec=None):
+        self.root_path = os.path.abspath(root_path)
+        self.ignore_spec = ignore_spec
+
+    def _should_ignore(self, path):
+        if self.ignore_spec:
+            rel_path = os.path.relpath(path, self.root_path)
+            return self.ignore_spec.match_file(rel_path)
+        return False
+
+    def on_moved(self, event):
+        if not event.is_directory:
+            if not self._should_ignore(event.src_path):
+                _update_or_remove_file(event.src_path) # Will delete because it's gone
+            if not self._should_ignore(event.dest_path):
+                _update_or_remove_file(event.dest_path) # Will add
+
+    def on_created(self, event):
+        if not event.is_directory:
+            if not self._should_ignore(event.src_path):
+                _update_or_remove_file(event.src_path)
+
+    def on_deleted(self, event):
+        if not event.is_directory:
+            if not self._should_ignore(event.src_path):
+                _update_or_remove_file(event.src_path)
+
+    def on_modified(self, event):
+        if not event.is_directory:
+            if not self._should_ignore(event.src_path):
+                _update_or_remove_file(event.src_path)
+
 
 
 @mcp.tool()
@@ -294,49 +381,39 @@ def update_file(file_path: str) -> str:
     If the file exists, it is re-indexed.
     If the file does not exist, it is removed from the index.
     """
-    file_path = os.path.abspath(file_path)
-    current_time = time.time()
-    
-    with get_db() as conn:
-        with conn:
-            if not os.path.exists(file_path):
-                # File deleted
-                conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
-                conn.execute("DELETE FROM documents_meta WHERE path = ?", (file_path,))
-                return f"Removed {file_path} from index."
-            
-            try:
-                # 1. Read and Tokenize
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                
-                tokens = tokenize(content)
-                
-                # 2. Update FTS
-                conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
-                conn.execute(
-                    "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
-                    (file_path, content, tokens),
-                )
-                
-                # 3. Update Metadata
-                file_mtime = os.path.getmtime(file_path)
-                conn.execute(
-                    """
-                    INSERT INTO documents_meta (path, mtime, scanned_at) 
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(path) DO UPDATE SET
-                        mtime = excluded.mtime,
-                        scanned_at = excluded.scanned_at
-                    """,
-                    (file_path, file_mtime, current_time)
-                )
-                return f"Updated {file_path} in index."
+    return _update_or_remove_file(file_path)
 
-            except UnicodeDecodeError:
-                return f"Skipped binary/non-utf8 file: {file_path}"
-            except Exception as e:
-                return f"Failed to update {file_path}: {e}"
+
+@mcp.tool()
+def watch_directory(root_path: str) -> str:
+    """
+    Start watching a directory for changes and automatically update the index.
+    """
+    root_path = os.path.abspath(root_path)
+    if not os.path.exists(root_path):
+        return f"Error: Path {root_path} does not exist."
+    
+    # Load .gitignore
+    gitignore_path = os.path.join(root_path, ".gitignore")
+    ignore_spec = None
+    if os.path.exists(gitignore_path):
+        try:
+            with open(gitignore_path, "r", encoding="utf-8") as f:
+                ignore_spec = pathspec.PathSpec.from_lines("gitignore", f)
+        except Exception as e:
+            print(f"Failed to load .gitignore: {e}")
+
+    handler = FTSHandler(root_path, ignore_spec)
+    
+    # Check if already watching to avoid duplicates? 
+    # Warning: Standard Observer doesn't easily deduplicate.
+    # For now, we assume users call this once per unique path.
+    
+    observer.schedule(handler, root_path, recursive=True)
+    if not observer.is_alive():
+        observer.start()
+        
+    return f"Started watching {root_path} for changes."
 
 
 def main():
