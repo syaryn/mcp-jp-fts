@@ -4,6 +4,7 @@ import sqlite3
 from typing import List
 
 from fastmcp import FastMCP
+import pathspec
 from sudachipy import dictionary, tokenizer
 
 # Initialize FastMCP server
@@ -73,11 +74,30 @@ def index_directory(root_path: str) -> str:
             )
 
             # 2. Walk and Index
+            # Load .gitignore if exists
+            gitignore_path = os.path.join(root_path, ".gitignore")
+            ignore_spec = None
+            if os.path.exists(gitignore_path):
+                try:
+                    with open(gitignore_path, "r", encoding="utf-8") as f:
+                        ignore_spec = pathspec.PathSpec.from_lines("gitignore", f)
+                except Exception as e:
+                    print(f"Failed to load .gitignore: {e}")
+
             for dirpath, _, filenames in os.walk(root_path):
                 for filename in filenames:
                     # Skip hidden files
                     if filename.startswith("."):
                         continue
+                    
+                    file_path = os.path.join(dirpath, filename)
+                    
+                    # Check .gitignore
+                    if ignore_spec:
+                        rel_path = os.path.relpath(file_path, root_path)
+                        if ignore_spec.match_file(rel_path):
+                            continue
+
 
                     file_path = os.path.join(dirpath, filename)
 

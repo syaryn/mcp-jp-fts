@@ -183,3 +183,33 @@ def test_list_indexed_files(temp_db, resource_dir):
         # Pagination check
         files_limited = server.list_indexed_files(limit=1) # type: ignore
         assert len(files_limited) == 1
+
+
+def test_index_respects_gitignore(temp_db, resource_dir):
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        # Create .gitignore
+        gitignore_path = os.path.join(resource_dir, ".gitignore")
+        with open(gitignore_path, "w", encoding="utf-8") as f:
+            f.write("*.tmp\nignore_me.txt\n")
+            
+        # Create ignored files
+        with open(os.path.join(resource_dir, "test.tmp"), "w") as f:
+            f.write("ignored content")
+        with open(os.path.join(resource_dir, "ignore_me.txt"), "w") as f:
+            f.write("ignored content")
+            
+        # Create normal file
+        with open(os.path.join(resource_dir, "normal.txt"), "w") as f:
+            f.write("normal content")
+            
+        # Index
+        server.index_directory(resource_dir) # type: ignore
+        
+        # Verify
+        files = server.list_indexed_files() # type: ignore
+        basenames = [os.path.basename(f) for f in files]
+        
+        assert "normal.txt" in basenames
+        assert "test.tmp" not in basenames
+        assert "ignore_me.txt" not in basenames
+        assert "wagahai.txt" in basenames # existing content
