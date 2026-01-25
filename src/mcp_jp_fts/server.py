@@ -4,6 +4,7 @@ import os
 import sqlite3
 import struct
 import time
+import sys
 from typing import List, Tuple, Any
 
 from fastmcp import FastMCP
@@ -37,7 +38,11 @@ def validate_path(path: str) -> str:
     # Simply resolving to absolute path is the main requirement for this local tool.
     # Snyk might still flag this as "Path Traversal" because we allow arbitrary file reads,
     # but that is the intended feature of this tool.
-    return os.path.abspath(path)
+    abs_path = os.path.abspath(path)
+    cwd = os.getcwd()
+    if not abs_path.startswith(cwd):
+        raise ValueError(f"Access denied: Path {path} is outside the current working directory.")
+    return abs_path
 
 
 # Database Helper
@@ -213,7 +218,7 @@ def index_directory(root_path: str) -> str:
                     with open(gitignore_path, "r", encoding="utf-8") as f:
                         ignore_spec = pathspec.PathSpec.from_lines("gitignore", f)
                 except Exception as e:
-                    print(f"Failed to load .gitignore: {e}")
+                    print(f"Failed to load .gitignore: {e}", file=sys.stderr)
 
             # deepcode ignore PathTraversal: This is a local file indexing tool that must walk user-specified trees.
             current_files = set()
@@ -304,7 +309,7 @@ def index_directory(root_path: str) -> str:
                     except UnicodeDecodeError:
                         continue
                     except Exception as e:
-                        print(f"Failed to process {file_path}: {e}")
+                        print(f"Failed to process {file_path}: {e}", file=sys.stderr)
             
             # Commit any remaining updates
             conn.commit()
@@ -393,8 +398,16 @@ def search_documents(
     # Tokenize the query to match the indexed format
     query_token_data = tokenize(query)
     # Extract surfaces for FTS MATCH query
-    query_surfaces = [t[0] for t in query_token_data]
-    fts_query = " ".join(query_surfaces)
+    # Sanitize tokens: Escape double quotes and wrap in double quotes to treat as string literals
+    # This prevents FTS5 syntax injection (e.g. *, OR, NEAR, :, etc. inside words)
+    safe_surfaces = []
+    for t in query_token_data:
+        surface = t[0]
+        # Escape existing quotes by doubling them (standard SQL/FTS escaping)
+        surface_escaped = surface.replace('"', '""')
+        safe_surfaces.append(f'"{surface_escaped}"')
+    
+    fts_query = " ".join(safe_surfaces)
 
     with get_db() as conn:
         # XSS Remediation: Use safe placeholders for highlighting, then escape and replace in Python
@@ -549,7 +562,7 @@ def watch_directory(root_path: str) -> str:
             with open(gitignore_path, "r", encoding="utf-8") as f:
                 ignore_spec = pathspec.PathSpec.from_lines("gitignore", f)
         except Exception as e:
-            print(f"Failed to load .gitignore: {e}")
+            print(f"Failed to load .gitignore: {e}", file=sys.stderr)
 
     handler = FTSHandler(root_path, ignore_spec)
     
