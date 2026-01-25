@@ -9,6 +9,8 @@ A Model Context Protocol (MCP) server for Japanese full-text search using **Fast
 - **Japanese Full-Text Search**: Uses SudachiPy (Mode A) to properly tokenize Japanese text for high-precision search
 - **Local File Indexing**: Recursively scans directories to index text files
 - **Precise Line Number Resolution**: Accurately identifies line numbers for matches, even with complex Japanese tokenization
+- **Extension Filtering**: Search results can be filtered by specific file extensions (e.g., `.py`, `.md`)
+- **.gitignore Support**: Respects `.gitignore` files to exclude unwanted files from indexing
 - **Atomic Updates**: Automatically removes entries for deleted files when re-indexing a directory to keep the index clean
 - **FastMCP Integration**: Exposes `index_directory` and `search_documents` as MCP tools
 
