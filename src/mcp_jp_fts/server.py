@@ -2,8 +2,9 @@ import contextlib
 import html
 import os
 import sqlite3
+import struct
 import time
-from typing import List
+from typing import List, Tuple, Any
 
 from fastmcp import FastMCP
 import pathspec
@@ -20,10 +21,12 @@ tokenizer_obj = dictionary.Dictionary().create()
 mode = tokenizer.Tokenizer.SplitMode.A
 
 
-def tokenize(text: str) -> str:
-    """Tokenize text using SudachiPy and return space-separated string."""
+def tokenize(text: str) -> List[Tuple[str, int]]:
+    """
+    Tokenize text using SudachiPy and return list of (surface, byte_offset) tuples.
+    """
     tokens = tokenizer_obj.tokenize(text, mode)
-    return " ".join([m.surface() for m in tokens])
+    return [(m.surface(), m.begin()) for m in tokens]
 
 
 def validate_path(path: str) -> str:
@@ -44,15 +47,16 @@ DB_PATH = "documents.db"
 @contextlib.contextmanager
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    init_db(conn)
     try:
         yield conn
     finally:
         conn.close()
 
 
-def init_db():
+def init_db(conn: sqlite3.Connection):
     """Initialize the SQLite database with a FTS5 virtual table."""
-    with get_db() as conn:
+    with conn:
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
                 path,
@@ -67,17 +71,23 @@ def init_db():
             CREATE TABLE IF NOT EXISTS documents_meta (
                 path TEXT PRIMARY KEY,
                 mtime REAL,
-                scanned_at REAL
+                scanned_at REAL,
+                token_locations BLOB
             );
         """)
+        
+        # Migration: Add token_locations column if it doesn't exist (for existing DBs)
+        try:
+            conn.execute("ALTER TABLE documents_meta ADD COLUMN token_locations BLOB")
+        except sqlite3.OperationalError:
+            # Column likely already exists
+            pass
         # Enable Write-Ahead Logging (WAL) for better concurrency
         conn.execute("PRAGMA journal_mode=WAL;")
         # Note: 'unicode61' is the default tokenizer which works well with space-separated tokens
 
 
-# Initialize DB on startup
-# Initialize DB on startup
-init_db()
+
 
 # Global Observer for Watch Mode
 observer = Observer()
@@ -102,26 +112,39 @@ def _update_or_remove_file(file_path: str) -> str:
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 
-                tokens = tokenize(content)
+                # Tokenize and get offsets
+                token_data = tokenize(content)
+                token_surfaces = [t[0] for t in token_data]
+                token_offsets = [t[1] for t in token_data]
+                
+                # Join tokens for FTS
+                tokens_str = " ".join(token_surfaces)
+                
+                # Pack offsets only (unsigned int, 4 bytes)
+                # 'I' is unsigned int (4 bytes). We use big-endian or native? Standard 'I' is typically 4 bytes.
+                # Use '<' for little-endian or '>' for big-endian to be explicit? '<' is standard for generic data.
+                # Actually, simple 'I'*len is fine if consistent.
+                packed_offsets = struct.pack(f"<{len(token_offsets)}I", *token_offsets)
                 
                 # 2. Update FTS
                 conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
                 conn.execute(
                     "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
-                    (file_path, content, tokens),
+                    (file_path, content, tokens_str),
                 )
                 
                 # 3. Update Metadata
                 file_mtime = os.path.getmtime(file_path)
                 conn.execute(
                     """
-                    INSERT INTO documents_meta (path, mtime, scanned_at) 
-                    VALUES (?, ?, ?)
+                    INSERT INTO documents_meta (path, mtime, scanned_at, token_locations) 
+                    VALUES (?, ?, ?, ?)
                     ON CONFLICT(path) DO UPDATE SET
                         mtime = excluded.mtime,
-                        scanned_at = excluded.scanned_at
+                        scanned_at = excluded.scanned_at,
+                        token_locations = excluded.token_locations
                     """,
-                    (file_path, file_mtime, current_time)
+                    (file_path, file_mtime, current_time, packed_offsets)
                 )
                 return f"Updated {file_path} in index."
 
@@ -192,17 +215,26 @@ def index_directory(root_path: str) -> str:
                     print(f"Failed to load .gitignore: {e}")
 
             # deepcode ignore PathTraversal: This is a local file indexing tool that must walk user-specified trees.
+            current_files = set()
+            print(f"DEBUG: Walking {root_path}")
             for dirpath, _, filenames in os.walk(root_path):
                 for filename in filenames:
                     if filename.startswith("."):
                         continue
                     
                     file_path = os.path.join(dirpath, filename)
+                    print(f"DEBUG: Found candidate {file_path}")
                     
                     if ignore_spec:
                         rel_path = os.path.relpath(file_path, root_path)
                         if ignore_spec.match_file(rel_path):
+                            print(f"DEBUG: Ignored {rel_path}")
                             continue
+                            
+                    # Add to current_files set
+                    abs_path = validate_path(file_path)
+                    print(f"DEBUG: Tracking {abs_path}")
+                    current_files.add(abs_path)
 
                     try:
                         # Get file mtime
@@ -222,33 +254,46 @@ def index_directory(root_path: str) -> str:
                         
                         if needs_update:
                             # 1. Read and Tokenize
-                            # deepcode ignore PathTraversal: This is a local file indexing tool that must access user-specified files.
+                            # deepcode ignore PathTraversal: Validated path access
                             with open(file_path, "r", encoding="utf-8") as f:
                                 content = f.read()
                             
-                            tokens = tokenize(content)
+                            # Tokenize and get offsets
+                            token_data = tokenize(content)
+                            token_surfaces = [t[0] for t in token_data]
+                            token_offsets = [t[1] for t in token_data]
+                            
+                            tokens_str = " ".join(token_surfaces)
+                            packed_offsets = struct.pack(f"<{len(token_offsets)}I", *token_offsets)
                             
                             # 2. Update FTS (Delete old entry if exists, then Insert)
                             conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
                             conn.execute(
                                 "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
-                                (file_path, content, tokens),
+                                (file_path, content, tokens_str),
                             )
                             updated_count += 1
+
+                            # 3. Update Metadata (mtime and scanned_at)
+                            conn.execute(
+                                """
+                                INSERT INTO documents_meta (path, mtime, scanned_at, token_locations) 
+                                VALUES (?, ?, ?, ?)
+                                ON CONFLICT(path) DO UPDATE SET
+                                    mtime = excluded.mtime,
+                                    scanned_at = excluded.scanned_at,
+                                    token_locations = excluded.token_locations
+                                """,
+                                (file_path, file_mtime, current_time, packed_offsets)
+                            )
+
                         else:
                             skipped_count += 1
-
-                        # 3. Update Metadata (mtime and scanned_at)
-                        conn.execute(
-                            """
-                            INSERT INTO documents_meta (path, mtime, scanned_at) 
-                            VALUES (?, ?, ?)
-                            ON CONFLICT(path) DO UPDATE SET
-                                mtime = excluded.mtime,
-                                scanned_at = excluded.scanned_at
-                            """,
-                            (file_path, file_mtime, current_time)
-                        )
+                            # Update scanned_at even if skipped, so it's not marked as stale
+                            conn.execute(
+                                "UPDATE documents_meta SET scanned_at = ? WHERE path = ?",
+                                (current_time, file_path)
+                            )
 
                     except UnicodeDecodeError:
                         continue
@@ -330,15 +375,23 @@ def search_documents(
         path_filter: Only return results under this path
         extensions: List of file extensions to include (e.g., [".py", ".md"])
     """
-    # Tokenize the query to match the indexed format
-    query_tokens = tokenize(query)
-    fts_query = query_tokens
 
-    results = []
+    # Tokenize the query to match the indexed format
+    query_token_data = tokenize(query)
+    # Extract surfaces for FTS MATCH query
+    query_surfaces = [t[0] for t in query_token_data]
+    fts_query = " ".join(query_surfaces)
+
     with get_db() as conn:
         # XSS Remediation: Use safe placeholders for highlighting, then escape and replace in Python
+        # Use offsets() to find which token matched
+        # Note: We fetch tokens to count spaces for term index
         sql = """
-            SELECT path, snippet(documents_fts, 1, '{{{MATCH}}}', '{{{/MATCH}}}', '...', 64) 
+            SELECT 
+                path, 
+                snippet(documents_fts, 1, '{{{MATCH}}}', '{{{/MATCH}}}', '...', 64), 
+                highlight(documents_fts, 2, '{{{MATCH}}}', '{{{/MATCH}}}'), 
+                tokens
             FROM documents_fts 
             WHERE tokens MATCH ? 
         """
@@ -370,10 +423,30 @@ def search_documents(
         params.append(limit)
 
         cursor = conn.execute(sql, params)
+        rows = list(cursor)
+        
+        if not rows:
+            return ["No matches found."]
+            
+        # Fetch Token Maps for the found paths
+        # Optimization: Batch fetch
+        found_paths = [r[0] for r in rows]
+        placeholders = ",".join(["?"] * len(found_paths))
+        meta_cursor = conn.execute(
+            f"SELECT path, token_locations FROM documents_meta WHERE path IN ({placeholders})",
+            found_paths
+        )
+        token_map_lookup = {r[0]: r[1] for r in meta_cursor}
 
-        for row in cursor:
+        results = []
+        for row in rows:
             path = row[0]
             raw_snippet = row[1]
+            highlighted_tokens = row[2]
+            tokens_str = row[3]
+            
+            # Lookup token locations map
+            token_locations_blob = token_map_lookup.get(path)
             
             # Escape the entire string first (sanitizing malicious scripts)
             safe_snippet = html.escape(raw_snippet)
@@ -381,7 +454,37 @@ def search_documents(
             # Restore the highlighting tags
             final_snippet = safe_snippet.replace("{{{MATCH}}}", "<b>").replace("{{{/MATCH}}}", "</b>")
             
-            results.append(f"File: {path}\nSnippet: {final_snippet}\n")
+            # Calculate Line Number using Token Map Strategy via Highlight
+            line_number = 1
+            try:
+                # highlighted_tokens contains "A B {{{MATCH}}}Target{{{/MATCH}}} C"
+                # We find the first {{{MATCH}}} in highlighted_tokens
+                # Then count spaces before it.
+                
+                match_start = highlighted_tokens.find("{{{MATCH}}}")
+                if match_start != -1 and token_locations_blob:
+                    preceding_text_highlighted = highlighted_tokens[:match_start]
+                    
+                    # preceding_text might contain match tags?
+                    # Since we found FIRST match, no match tags before it.
+                    # Just count spaces.
+                    token_index = preceding_text_highlighted.count(" ")
+                    
+                    # Unpack blob
+                    count = len(token_locations_blob) // 4
+                    if token_index < count:
+                        original_byte_offset = struct.unpack_from(f"<I", token_locations_blob, offset=token_index*4)[0]
+                        
+                        # deepcode ignore PathTraversal: Validated path access
+                        with open(path, "r", encoding="utf-8") as f:
+                            f.seek(0)
+                            prefix = f.read(original_byte_offset)
+                            line_number = prefix.count("\n") + 1
+
+            except Exception:
+                pass
+            
+            results.append(f"File: {path}:{line_number}\nSnippet: {final_snippet}\n")
 
     if not results:
         return ["No matches found."]
