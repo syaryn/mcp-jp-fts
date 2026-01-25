@@ -14,6 +14,7 @@ test-all = "uv run tox"
 lint = "uv run ruff check ."
 format = "uv run ruff format ."
 type = "uv run ty check ."
-check = { depends = ["lint", "type", "test"] }
+lock-check = "uv lock --check"
+check = { depends = ["lint", "type", "test", "lock-check"] }
 scan = "osv-scanner -r ."
 scan-license = "osv-scanner --licenses='BSD-3-Clause,Apache-2.0,MIT,PSF-2.0,MPL-2.0,ISC,BSD-2-Clause,Unlicense' -r ."
