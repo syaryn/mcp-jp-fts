@@ -303,7 +303,10 @@ def index_directory(root_path: str) -> str:
                                 content = f.read()
                             
                             # Tokenize and get offsets
-                            token_data = tokenize(content)
+                            raw_token_data = tokenize(content)
+                            # Filter out whitespace-only tokens (newlines, spaces) which mess up token counting
+                            token_data = [t for t in raw_token_data if t[0].strip()]
+                            
                             token_surfaces = [t[0] for t in token_data]
                             token_offsets = [t[1] for t in token_data]
                             
@@ -445,15 +448,14 @@ def search_documents(
         return ["No matches found."]
 
     fts_query = " ".join(safe_surfaces)
-
     with get_db() as conn:
+        # XSS Remediation: ...
         # XSS Remediation: Use safe placeholders for highlighting, then escape and replace in Python
         # Use offsets() to find which token matched
         # Note: We fetch tokens to count spaces for term index
         sql = """
             SELECT 
                 path, 
-                snippet(documents_fts, 1, '{{{MATCH}}}', '{{{/MATCH}}}', '...', 64), 
                 highlight(documents_fts, 2, '{{{MATCH}}}', '{{{/MATCH}}}'), 
                 tokens
             FROM documents_fts 
@@ -495,6 +497,7 @@ def search_documents(
         # Fetch Token Maps for the found paths
         # Optimization: Batch fetch
         found_paths = [r[0] for r in rows]
+        
         placeholders = ",".join(["?"] * len(found_paths))
         meta_cursor = conn.execute(
             f"SELECT path, token_locations FROM documents_meta WHERE path IN ({placeholders})",
@@ -505,57 +508,87 @@ def search_documents(
         results = []
         for row in rows:
             path = row[0]
-            raw_snippet = row[1]
-            highlighted_tokens = row[2]
-            tokens_str = row[3]
+            # row[1] is highlight(...)
+            highlighted_tokens = row[1]
             
             # Lookup token locations map
             token_locations_blob = token_map_lookup.get(path)
             
-            # Escape the entire string first (sanitizing malicious scripts)
-            safe_snippet = html.escape(raw_snippet)
-            
-            # Restore the highlighting tags
-            final_snippet = safe_snippet.replace("{{{MATCH}}}", "<b>").replace("{{{/MATCH}}}", "</b>")
-            
-            # Calculate Line Number using Token Map Strategy via Highlight
-            line_number = 1
-            try:
-                # highlighted_tokens contains "A B {{{MATCH}}}Target{{{/MATCH}}} C"
-                # We find the first {{{MATCH}}} in highlighted_tokens
-                # Then count spaces before it.
-                
-                match_start = highlighted_tokens.find("{{{MATCH}}}")
-                if match_start != -1 and token_locations_blob:
-                    preceding_text_highlighted = highlighted_tokens[:match_start]
-                    
-                    # preceding_text might contain match tags?
-                    # Since we found FIRST match, no match tags before it.
-                    # Just count spaces.
-                    token_index = preceding_text_highlighted.count(" ")
-                    
-                    # Unpack blob
-                    count = len(token_locations_blob) // 4
-                    if token_index < count:
-                        original_byte_offset = struct.unpack_from("<I", token_locations_blob, offset=token_index*4)[0]
-                        
-                        # deepcode ignore PathTraversal: Validated path access
-                        # deepcode ignore PathTraversal: Validated path access
-                        try:
-                            # Use binary mode to read exact byte offset as determined by token map
-                            with open(path, "rb") as f:
-                                f.seek(0)
-                                prefix_bytes = f.read(original_byte_offset)
-                                line_number = prefix_bytes.count(b"\n") + 1
-                        except (IOError, OSError, ValueError):
-                            # File might have changed or been deleted since search match
-                            # Fallback to line 1 or handle gracefully
-                            line_number = 1
+            if not token_locations_blob:
+                # Should not happen if index is consistent
+                continue
 
-            except Exception:
-                pass
+            # Find all matches in highlighted_tokens
+            # Search for {{{MATCH}}}
+            # We need to find ALL start indices of {{{MATCH}}}
+            match_indices = []
+            start = 0
+            while True:
+                idx = highlighted_tokens.find("{{{MATCH}}}", start)
+                if idx == -1:
+                    break
+                match_indices.append(idx)
+                start = idx + len("{{{MATCH}}}")
             
-            results.append(f"File: {path}:{line_number}\nSnippet: {final_snippet}\n")
+            print(f"DEBUG: path={path}, tokens={highlighted_tokens}", file=sys.stderr)
+            
+            # Limit matches per file to avoid huge output
+            MAX_MATCHES_PER_FILE = 3
+            match_indices = match_indices[:MAX_MATCHES_PER_FILE]
+
+            try:
+                with open(path, "rb") as f:
+                    for match_start in match_indices:
+                        # Calculate token index
+                        preceding_text = highlighted_tokens[:match_start]
+                        # Count spaces to get token index
+                        # Note: highlighted_tokens contains match tags, but since we scan left-to-right,
+                        # and we strip tags, or wait...
+                        # If we have multiple matches: "A {{{MATCH}}}B{{{/MATCH}}} C {{{MATCH}}}D{{{/MATCH}}}"
+                        # match_start for D is after B.
+                        # preceding_text for D includes "A {{{MATCH}}}B{{{/MATCH}}} C "
+                        # We must treat {{{MATCH}}} and {{{/MATCH}}} as transparent or NOT?
+                        # ACTUALLY: The tokens column is space-separated surfaces.
+                        # highlight() just wraps the surfaces.
+                        
+                        # Use split() to count tokens robustly (ignoring multiple spaces)
+                        # We assume tokens themselves do not contain spaces (which is true for our tokenizer surfaces)
+                        token_index = len(preceding_text.split())
+                        
+                        count_tokens = len(token_locations_blob) // 4
+                        if token_index < count_tokens:
+                            byte_offset = struct.unpack_from("<I", token_locations_blob, offset=token_index*4)[0]
+                            
+                            f.seek(0)
+                            # Read up to offset to count newlines
+                            prefix = f.read(byte_offset)
+                            line_number = prefix.count(b"\n") + 1
+                            
+                            # Read Snippet Context (e.g. 50 bytes before and after)
+                            # Be careful with UTF-8 distinct chars
+                            context_start = max(0, byte_offset - 50)
+                            context_len = 100 # Read 100 bytes approx
+                            f.seek(context_start)
+                            snippet_bytes = f.read(context_len)
+                            
+                            # Decode responsibly (replace errors)
+                            snippet_str = snippet_bytes.decode("utf-8", errors="replace")
+                            
+                            # Sanitize HTML
+                            safe_snippet = html.escape(snippet_str)
+                            
+                            # Highlight the match term roughly (simple string match might be wrong if multiple same words)
+                            # But since we don't have exact length of the token in bytes easily available here without more logic,
+                            # We can just show the plain snippet or try to highlight.
+                            # For now, let's trusting the offset line number is the most value.
+                            # We can refine snippet later if needed.
+                            # Just surrounding the whole snippet with "..."
+                            
+                            results.append(f"File: {path}:{line_number}\nSnippet: ...{safe_snippet}...\n")
+
+            except (IOError, OSError, ValueError):
+                continue
+
 
     if not results:
         return ["No matches found."]
