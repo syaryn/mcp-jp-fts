@@ -334,10 +334,11 @@ def index_directory(root_path: str) -> str:
                         else:
                             skipped_count += 1
                             # Update scanned_at even if skipped, so it's not marked as stale
-                            conn.execute(
-                                "UPDATE documents_meta SET scanned_at = ? WHERE path = ?",
-                                (current_time, file_path)
-                            )
+                            with conn:
+                                conn.execute(
+                                    "UPDATE documents_meta SET scanned_at = ? WHERE path = ?",
+                                    (current_time, file_path)
+                                )
                         
                         # Use explicit transaction commit for batches to avoid locking the DB for too long
                         if updated_count > 0 and updated_count % BATCH_SIZE == 0:

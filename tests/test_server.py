@@ -331,9 +331,13 @@ def test_incremental_indexing(temp_db, tmp_path):
         # - b.txt: Deleted
         # - c.txt: Added
 
-        time.sleep(1.1)  # Ensure mtime changes significantly
+        # Explicitly set mtime to be safely in the future
+        future_mtime = time.time() + 10
+        os.utime(file_a, (future_mtime, future_mtime))
+        # Ensure content change too, though mtime is primary check
         with open(file_a, "w") as f:
             f.write("content A modified")
+            
         os.remove(file_b)
         file_c = os.path.join(clean_dir, "c.txt")
         with open(file_c, "w") as f:
