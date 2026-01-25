@@ -303,8 +303,7 @@ def test_search_extension_filtering(temp_db, resource_dir):
         assert any(".md" in r for r in results_multi)
         assert not any(".txt" in r for r in results_multi)
 
-        assert any(".md" in r for r in results_multi)
-        assert not any(".txt" in r for r in results_multi)
+
 
 
 def test_incremental_indexing(temp_db, tmp_path):
