@@ -501,7 +501,7 @@ def test_search_line_numbers_multibyte(temp_db, tmp_path):
     
     with patch("mcp_jp_fts.server.DB_PATH", temp_db):
         file_path = os.path.join(clean_dir, "multibyte.txt")
-        with open(file_path, "w") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             # Struct:
             # Line 1: あ (3 bytes) + \n (1 byte) = 4 bytes
             # Line 2: い (3 bytes) + \n (1 byte) = 4 bytes (Offset 4)
