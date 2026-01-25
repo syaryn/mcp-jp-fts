@@ -195,10 +195,10 @@ Searches indexed documents using SudachiPy tokenization.
 
 **Output example:**
 ```
-File: /path/to/wagahai.txt
+File: /path/to/wagahai.txt:1
 Snippet: 吾輩は<b>猫</b>である...
 
-File: /path/to/other.txt
+File: /path/to/other.txt:15
 Snippet: この<b>猫</b>は...
 ```
 
