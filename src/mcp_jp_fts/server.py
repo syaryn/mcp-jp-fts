@@ -203,7 +203,8 @@ def index_directory(root_path: str) -> str:
     skipped_count = 0
     
     with get_db() as conn:
-        with conn:
+        # We manually manage transactions (commits) inside the loop for concurrency
+        # with conn:  <-- Removed monolithic transaction block
             # Load .gitignore if exists
             gitignore_path = os.path.join(root_path, ".gitignore")
             ignore_spec = None
@@ -216,24 +217,25 @@ def index_directory(root_path: str) -> str:
 
             # deepcode ignore PathTraversal: This is a local file indexing tool that must walk user-specified trees.
             current_files = set()
-            print(f"DEBUG: Walking {root_path}")
+            
+            # Batch commit configuration
+            BATCH_SIZE = 50
+            pending_updates = 0
+
             for dirpath, _, filenames in os.walk(root_path):
                 for filename in filenames:
                     if filename.startswith("."):
                         continue
                     
                     file_path = os.path.join(dirpath, filename)
-                    print(f"DEBUG: Found candidate {file_path}")
                     
                     if ignore_spec:
                         rel_path = os.path.relpath(file_path, root_path)
                         if ignore_spec.match_file(rel_path):
-                            print(f"DEBUG: Ignored {rel_path}")
                             continue
                             
                     # Add to current_files set
                     abs_path = validate_path(file_path)
-                    print(f"DEBUG: Tracking {abs_path}")
                     current_files.add(abs_path)
 
                     try:
@@ -294,11 +296,18 @@ def index_directory(root_path: str) -> str:
                                 "UPDATE documents_meta SET scanned_at = ? WHERE path = ?",
                                 (current_time, file_path)
                             )
+                        
+                        # Use explicit transaction commit for batches to avoid locking the DB for too long
+                        if updated_count > 0 and updated_count % BATCH_SIZE == 0:
+                            conn.commit()
 
                     except UnicodeDecodeError:
                         continue
                     except Exception as e:
                         print(f"Failed to process {file_path}: {e}")
+            
+            # Commit any remaining updates
+            conn.commit()
 
             # 4. Cleanup Stale Entries
             # Delete files under root_path that were NOT scanned in this pass
@@ -318,9 +327,14 @@ def index_directory(root_path: str) -> str:
             )
             stale_paths = [r[0] for r in cursor]
             
-            for path in stale_paths:
-                conn.execute("DELETE FROM documents_fts WHERE path = ?", (path,))
-                conn.execute("DELETE FROM documents_meta WHERE path = ?", (path,))
+            # Optimization: Batch delete
+            if stale_paths:
+                # SQLite limit is usually high, but let's chunk safely if huge
+                # For now assuming typical usage < 500 stale files at once
+                placeholders = ",".join(["?"] * len(stale_paths))
+                conn.execute(f"DELETE FROM documents_fts WHERE path IN ({placeholders})", stale_paths)
+                conn.execute(f"DELETE FROM documents_meta WHERE path IN ({placeholders})", stale_paths)
+                conn.commit()
             
             deleted_count = len(stale_paths)
 
