@@ -599,19 +599,24 @@ def watch_directory(root_path: str) -> str:
 
     handler = FTSHandler(root_path, ignore_spec)
     
+    global observer
+    
+    # Check observer health first
+    # If observer is dead, we must restart it AND clear the watched paths,
+    # because the new observer has no schedules.
+    if observer is None or not observer.is_alive():
+        if observer is not None:
+             # Observer existed but died. Clear stale state.
+             WATCHED_PATHS.clear()
+        
+        # Create new observer
+        observer = Observer()
+        
     # Check if already watching to avoid duplicates
     if root_path in WATCHED_PATHS:
         return f"Already watching {root_path}"
 
     WATCHED_PATHS.add(root_path)
-    
-    global observer
-    
-    # Simple check for liveness; if we need strict thread safety for concurrent tool calls, 
-    # we might need a lock, but for now we follow the improved pattern.
-    if observer is None or not observer.is_alive():
-        # Create new observer if None or dead
-        observer = Observer()
         
     try:
         if not observer.is_alive():
