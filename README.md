@@ -175,10 +175,10 @@ mise run start
 
 **出力例:**
 ```
-Indexed 42 files in /path/to/docs (Previous entries cleared).
+Indexed 42 files, Skipped 0 unchanged, Deleted 5 stale in /path/to/docs.
 ```
 
-**注意:** このパスの既存のインデックスをクリアしてから新しいデータを追加します。
+**注意:** 差分更新を行います。変更されたファイルのみ再インデックスし、削除されたファイルはインデックスから削除します。
 
 #### `search_documents`
 
@@ -222,6 +222,28 @@ Snippet: この<b>猫</b>は...
 {
   "limit": 10,
   "offset": 0
+}
+```
+
+#### `update_file`
+
+単一のファイルのインデックスを更新します（存在すれば再インデックス、削除されていればインデックスから削除）。
+
+**入力例:**
+```json
+{
+  "file_path": "/path/to/docs/new_doc.txt"
+}
+```
+
+#### `watch_directory`
+
+ディレクトリの変更を監視し、インデックスをリアルタイムで自動更新します。
+
+**入力例:**
+```json
+{
+  "root_path": "/path/to/docs"
 }
 ```
 

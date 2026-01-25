@@ -175,10 +175,10 @@ Indexes all text files in the specified path.
 
 **Output example:**
 ```
-Indexed 42 files in /path/to/docs (Previous entries cleared).
+Indexed 42 files, Skipped 0 unchanged, Deleted 5 stale in /path/to/docs.
 ```
 
-**Note:** Clears the existing index for this path before adding new data.
+**Note:** Performs an incremental update. Only changed files are re-indexed, and deleted files are removed.
 
 #### `search_documents`
 
@@ -222,6 +222,28 @@ Returns a list of currently indexed files.
 {
   "limit": 10,
   "offset": 0
+}
+```
+
+#### `update_file`
+
+Update the index for a single file. (Re-indexes if exists, removes if deleted).
+
+**Input:**
+```json
+{
+  "file_path": "/path/to/docs/new_doc.txt"
+}
+```
+
+#### `watch_directory`
+
+Start watching a directory for file changes and automatically update the index in real-time.
+
+**Input:**
+```json
+{
+  "root_path": "/path/to/docs"
 }
 ```
 
