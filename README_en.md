@@ -8,6 +8,7 @@ A Model Context Protocol (MCP) server for Japanese full-text search using **Fast
 
 - **Japanese Full-Text Search**: Uses SudachiPy (Mode A) to properly tokenize Japanese text for high-precision search
 - **Local File Indexing**: Recursively scans directories to index text files
+- **Precise Line Number Resolution**: Accurately identifies line numbers for matches, even with complex Japanese tokenization
 - **Atomic Updates**: Automatically removes entries for deleted files when re-indexing a directory to keep the index clean
 - **FastMCP Integration**: Exposes `index_directory` and `search_documents` as MCP tools
 
@@ -25,6 +26,7 @@ When compared to traditional grep-based file searches performed by LLMs, this fu
 **With this server:**
 - Word-level tokenization using SudachiPy morphological analysis
 - Understands Japanese linguistic structure for more accurate searches
+- **Accurate Line Numbers**: Uses a token mapping strategy to determine the exact line number of the match, unlike simple string searching which fails with tokenized text
 - Tokenization provides higher precision search results
 
 ### 2. Fast Search Through Indexing
