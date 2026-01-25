@@ -526,17 +526,18 @@ def test_search_line_numbers_multibyte(temp_db, tmp_path):
         assert "multibyte.txt:3" in results2[0]
 
 
-def test_search_crlf_offset(tmp_path):
+def test_search_crlf_offset(tmp_path, temp_db):
     d = tmp_path / "crlf_resources"
     d.mkdir()
     p = d / "crlf.txt"
     with open(p, "wb") as f:
         f.write(b"a\r\nb")
     
-    server.index_directory(str(d))  # type: ignore
-    
-    # Search for "b"
-    results = server.search_documents("b")  # type: ignore
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        server.index_directory(str(d))  # type: ignore
+        
+        # Search for "b"
+        results = server.search_documents("b")  # type: ignore
     assert len(results) > 0
     # Expected: Line 2. 
     
