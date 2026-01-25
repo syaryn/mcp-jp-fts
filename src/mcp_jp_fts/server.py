@@ -27,7 +27,37 @@ def tokenize(text: str) -> List[Tuple[str, int]]:
     Tokenize text using SudachiPy and return list of (surface, byte_offset) tuples.
     """
     tokens = tokenizer_obj.tokenize(text, mode)
-    return [(m.surface(), m.begin()) for m in tokens]
+    # SudachiPy returns character offsets (m.begin()).
+    # We need UTF-8 byte offsets for file seeking and FTS mapping.
+    # Recalculating byte offsets based on the utf-8 encoded text.
+    
+    results = []
+    current_byte_offset = 0
+    current_char_offset = 0
+    
+    for m in tokens:
+        surface = m.surface()
+        # Calculate bytes skipped since last token (e.g. spaces)
+        # However, SudachiPy usually returns contiguous tokens unless we skip something.
+        # But to be safe, we use substring from last char position to current token start.
+        # Wait, m.begin() is absolute char index.
+        
+        # Optimization: Maintain running char/byte count if tokens are sequential.
+        # But simpler: Get substring from 0 to m.begin(), encode, len().
+        # For non-sequential access it could be slow O(N^2), but tokens are sequential.
+        
+        # Efficient approach:
+        # We know tokens come in order.
+        skipped_text = text[current_char_offset:m.begin()]
+        current_byte_offset += len(skipped_text.encode("utf-8"))
+        
+        results.append((surface, current_byte_offset))
+        
+        surface_len_bytes = len(surface.encode("utf-8"))
+        current_byte_offset += surface_len_bytes
+        current_char_offset = m.end()
+        
+    return results
 
 
 def validate_path(path: str) -> str:
@@ -274,25 +304,25 @@ def index_directory(root_path: str) -> str:
                             packed_offsets = struct.pack(f"<{len(token_offsets)}I", *token_offsets)
                             
                             # 2. Update FTS (Delete old entry if exists, then Insert)
-                            conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
-                            conn.execute(
-                                "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
-                                (file_path, content, tokens_str),
-                            )
+                            with conn:
+                                conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
+                                conn.execute(
+                                    "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
+                                    (file_path, content, tokens_str),
+                                )
+                                # 3. Update Metadata (mtime and scanned_at)
+                                conn.execute(
+                                    """
+                                    INSERT INTO documents_meta (path, mtime, scanned_at, token_locations) 
+                                    VALUES (?, ?, ?, ?)
+                                    ON CONFLICT(path) DO UPDATE SET
+                                        mtime = excluded.mtime,
+                                        scanned_at = excluded.scanned_at,
+                                        token_locations = excluded.token_locations
+                                    """,
+                                    (file_path, file_mtime, current_time, packed_offsets)
+                                )
                             updated_count += 1
-
-                            # 3. Update Metadata (mtime and scanned_at)
-                            conn.execute(
-                                """
-                                INSERT INTO documents_meta (path, mtime, scanned_at, token_locations) 
-                                VALUES (?, ?, ?, ?)
-                                ON CONFLICT(path) DO UPDATE SET
-                                    mtime = excluded.mtime,
-                                    scanned_at = excluded.scanned_at,
-                                    token_locations = excluded.token_locations
-                                """,
-                                (file_path, file_mtime, current_time, packed_offsets)
-                            )
 
                         else:
                             skipped_count += 1
@@ -322,26 +352,22 @@ def index_directory(root_path: str) -> str:
             search_pattern = root_path if root_path.endswith(os.sep) else root_path + os.sep
             search_pattern = search_pattern + "%"
             
-            # Find stale paths
-            cursor = conn.execute(
-                """
-                SELECT path FROM documents_meta 
-                WHERE (path = ? OR path LIKE ?) AND scanned_at < ?
-                """,
-                (root_path, search_pattern, current_time)
-            )
-            stale_paths = [r[0] for r in cursor]
-            
-            # Optimization: Batch delete
-            if stale_paths:
-                # SQLite limit is usually high, but let's chunk safely if huge
-                # For now assuming typical usage < 500 stale files at once
-                placeholders = ",".join(["?"] * len(stale_paths))
-                conn.execute(f"DELETE FROM documents_fts WHERE path IN ({placeholders})", stale_paths)
-                conn.execute(f"DELETE FROM documents_meta WHERE path IN ({placeholders})", stale_paths)
+            # Cleanup stale entries atomically and efficiently
+            with conn:
+                conn.execute(
+                    """
+                    DELETE FROM documents_fts
+                    WHERE path IN (SELECT path FROM documents_meta WHERE (path = ? OR path LIKE ?) AND scanned_at < ?)
+                    """,
+                    (root_path, search_pattern, current_time)
+                )
+                cursor_meta = conn.execute(
+                    "DELETE FROM documents_meta WHERE (path = ? OR path LIKE ?) AND scanned_at < ?",
+                    (root_path, search_pattern, current_time)
+                )
                 conn.commit()
             
-            deleted_count = len(stale_paths)
+            deleted_count = cursor_meta.rowcount
 
     return f"Indexed {updated_count} files, Skipped {skipped_count} unchanged, Deleted {deleted_count} stale in {root_path}."
 
@@ -503,10 +529,16 @@ def search_documents(
                         original_byte_offset = struct.unpack_from(f"<I", token_locations_blob, offset=token_index*4)[0]
                         
                         # deepcode ignore PathTraversal: Validated path access
-                        with open(path, "r", encoding="utf-8") as f:
-                            f.seek(0)
-                            prefix = f.read(original_byte_offset)
-                            line_number = prefix.count("\n") + 1
+                        # deepcode ignore PathTraversal: Validated path access
+                        try:
+                            with open(path, "r", encoding="utf-8") as f:
+                                f.seek(0)
+                                prefix = f.read(original_byte_offset)
+                                line_number = prefix.count("\n") + 1
+                        except (IOError, OSError, ValueError):
+                            # File might have changed or been deleted since search match
+                            # Fallback to line 1 or handle gracefully
+                            line_number = 1
 
             except Exception:
                 pass
@@ -573,22 +605,16 @@ def watch_directory(root_path: str) -> str:
     WATCHED_PATHS.add(root_path)
     
     global observer
-    if observer is None:
+    
+    # Simple check for liveness; if we need strict thread safety for concurrent tool calls, 
+    # we might need a lock, but for now we follow the improved pattern.
+    if observer is None or not observer.is_alive():
+        # Create new observer if None or dead
         observer = Observer()
         
     try:
-        # If observer was stopped (e.g. in tests), we need a new instance
-        # Thread/Observer cannot be restarted once stopped.
-        # There is no public API to check if it's "stopped" vs "never started" easily without accessing internals
-        # or tracking state ourselves. 
-        # But commonly if is_alive() is False but we want to schedule, we might need to check.
         if not observer.is_alive():
-            try:
-                observer.start()
-            except RuntimeError:
-                # Threads can only be started once. If it was stopped, create new.
-                observer = Observer()
-                observer.start()
+            observer.start()
 
         observer.schedule(handler, root_path, recursive=True)
 
