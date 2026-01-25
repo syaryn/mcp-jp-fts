@@ -440,6 +440,9 @@ def search_documents(
         surface_escaped = surface.replace('"', '""')
         safe_surfaces.append(f'"{surface_escaped}"')
     
+    if not safe_surfaces:
+        return ["No matches found."]
+
     fts_query = " ".join(safe_surfaces)
 
     with get_db() as conn:
