@@ -1,4 +1,5 @@
 import contextlib
+import html
 import os
 import sqlite3
 import time
@@ -319,8 +320,9 @@ def search_documents(
 
     results = []
     with get_db() as conn:
+        # XSS Remediation: Use safe placeholders for highlighting, then escape and replace in Python
         sql = """
-            SELECT path, snippet(documents_fts, 1, '<b>', '</b>', '...', 64) 
+            SELECT path, snippet(documents_fts, 1, '{{{MATCH}}}', '{{{/MATCH}}}', '...', 64) 
             FROM documents_fts 
             WHERE tokens MATCH ? 
         """
@@ -354,7 +356,16 @@ def search_documents(
         cursor = conn.execute(sql, params)
 
         for row in cursor:
-            results.append(f"File: {row[0]}\nSnippet: {row[1]}\n")
+            path = row[0]
+            raw_snippet = row[1]
+            
+            # Escape the entire string first (sanitizing malicious scripts)
+            safe_snippet = html.escape(raw_snippet)
+            
+            # Restore the highlighting tags
+            final_snippet = safe_snippet.replace("{{{MATCH}}}", "<b>").replace("{{{/MATCH}}}", "</b>")
+            
+            results.append(f"File: {path}\nSnippet: {final_snippet}\n")
 
     if not results:
         return ["No matches found."]

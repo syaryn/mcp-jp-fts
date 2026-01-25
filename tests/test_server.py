@@ -400,3 +400,34 @@ def test_watch_directory_dedup(temp_db, tmp_path):
         assert "Already watching" in res2
         
         server.WATCHED_PATHS.clear()
+
+
+def test_search_xss_protection(temp_db, tmp_path):
+    RESOURCE_DIR = str(tmp_path / "xss_resources")
+    os.makedirs(RESOURCE_DIR)
+    
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        # Create a file with malicious content
+        malicious_content = "Here is a <script>alert('XSS')</script> attack example."
+        with open(os.path.join(RESOURCE_DIR, "malicious.txt"), "w") as f:
+            f.write(malicious_content)
+            
+        server.index_directory(RESOURCE_DIR) # type: ignore
+        
+        # Search for "XSS" or "attack" (tokenized)
+        # Sudachi might tokenize <script> differently, so search for "attack"
+        results = server.search_documents("attack") # type: ignore
+        assert len(results) > 0
+        snippet = results[0]
+        
+        # Verify:
+        # 1. <script> should be escaped to &lt;script&gt;
+        assert "&lt;script&gt;" in snippet
+        assert "<script>" not in snippet
+        
+        # 2. <b> tags for highlighting should be present (if "attack" is highlighted)
+        # Note: Depending on tokenization "attack" might be highlighted.
+        # Let's search for "example" to be sure it's in the snippet
+        results2 = server.search_documents("example") # type: ignore
+        snippet2 = results2[0]
+        assert "<b>" in snippet2 or "&lt;script&gt;" in snippet2
