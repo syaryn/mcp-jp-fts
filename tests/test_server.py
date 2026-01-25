@@ -381,3 +381,22 @@ def test_watch_mode(temp_db, tmp_path):
         # We can explicitly stop it to be clean, though pytest teardown handles it.
         server.observer.stop()
         server.observer.join()
+        server.WATCHED_PATHS.clear()
+
+
+def test_watch_directory_dedup(temp_db, tmp_path):
+    clean_dir = str(tmp_path / "dedup_resources")
+    os.makedirs(clean_dir)
+    
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        server.WATCHED_PATHS.clear() # Ensure clean state
+        
+        # 1. Start watching
+        res1 = server.watch_directory(clean_dir) # type: ignore
+        assert "Started watching" in res1
+        
+        # 2. Start watching again
+        res2 = server.watch_directory(clean_dir) # type: ignore
+        assert "Already watching" in res2
+        
+        server.WATCHED_PATHS.clear()

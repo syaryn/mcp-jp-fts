@@ -31,7 +31,7 @@ DB_PATH = "documents.db"
 
 @contextlib.contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     try:
         yield conn
     finally:
@@ -58,6 +58,8 @@ def init_db():
                 scanned_at REAL
             );
         """)
+        # Enable Write-Ahead Logging (WAL) for better concurrency
+        conn.execute("PRAGMA journal_mode=WAL;")
         # Note: 'unicode61' is the default tokenizer which works well with space-separated tokens
 
 
@@ -67,6 +69,7 @@ init_db()
 
 # Global Observer for Watch Mode
 observer = Observer()
+WATCHED_PATHS = set()
 
 def _update_or_remove_file(file_path: str) -> str:
     """Internal helper to update or remove a file from index."""
@@ -405,13 +408,35 @@ def watch_directory(root_path: str) -> str:
 
     handler = FTSHandler(root_path, ignore_spec)
     
-    # Check if already watching to avoid duplicates? 
-    # Warning: Standard Observer doesn't easily deduplicate.
-    # For now, we assume users call this once per unique path.
+    # Check if already watching to avoid duplicates
+    if root_path in WATCHED_PATHS:
+        return f"Already watching {root_path}"
+
+    WATCHED_PATHS.add(root_path)
     
-    observer.schedule(handler, root_path, recursive=True)
-    if not observer.is_alive():
-        observer.start()
+    global observer
+    if observer is None:
+        observer = Observer()
+        
+    try:
+        # If observer was stopped (e.g. in tests), we need a new instance
+        # Thread/Observer cannot be restarted once stopped.
+        # There is no public API to check if it's "stopped" vs "never started" easily without accessing internals
+        # or tracking state ourselves. 
+        # But commonly if is_alive() is False but we want to schedule, we might need to check.
+        if not observer.is_alive():
+            try:
+                observer.start()
+            except RuntimeError:
+                # Threads can only be started once. If it was stopped, create new.
+                observer = Observer()
+                observer.start()
+
+        observer.schedule(handler, root_path, recursive=True)
+
+    except Exception as e:
+        # Fallback if something goes wrong
+        return f"Failed to start watcher: {e}"
         
     return f"Started watching {root_path} for changes."
 
