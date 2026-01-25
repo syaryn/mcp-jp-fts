@@ -531,10 +531,11 @@ def search_documents(
                         # deepcode ignore PathTraversal: Validated path access
                         # deepcode ignore PathTraversal: Validated path access
                         try:
-                            with open(path, "r", encoding="utf-8") as f:
+                            # Use binary mode to read exact byte offset as determined by token map
+                            with open(path, "rb") as f:
                                 f.seek(0)
-                                prefix = f.read(original_byte_offset)
-                                line_number = prefix.count("\n") + 1
+                                prefix_bytes = f.read(original_byte_offset)
+                                line_number = prefix_bytes.count(b"\n") + 1
                         except (IOError, OSError, ValueError):
                             # File might have changed or been deleted since search match
                             # Fallback to line 1 or handle gracefully

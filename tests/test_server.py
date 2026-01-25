@@ -490,3 +490,34 @@ def test_search_xss_protection(temp_db, tmp_path):
         # 3. "example" should be present
         assert "example" in snippet
 
+
+def test_search_line_numbers_multibyte(temp_db, tmp_path):
+    """
+    Test that line numbers are calculated correctly for multi-byte files.
+    Regression test for: read(byte_offset) on text file reading characters instead of bytes.
+    """
+    clean_dir = str(tmp_path / "line_num_resources")
+    os.makedirs(clean_dir)
+    
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        file_path = os.path.join(clean_dir, "multibyte.txt")
+        with open(file_path, "w") as f:
+            # Struct:
+            # Line 1: あ (3 bytes) + \n (1 byte) = 4 bytes
+            # Line 2: い (3 bytes) + \n (1 byte) = 4 bytes (Offset 4)
+            # Line 3: う (3 bytes)                 (Offset 8)
+            f.write("あ\nい\nう")
+            
+        server.index_directory(clean_dir)
+        
+        # Search for "い" (Line 2)
+        results = server.search_documents("い")
+        assert len(results) > 0
+        # Should be Line 2
+        assert "multibyte.txt:2" in results[0]
+        
+        # Search for "う" (Line 3)
+        results2 = server.search_documents("う")
+        assert len(results2) > 0
+        assert "multibyte.txt:3" in results2[0]
+
