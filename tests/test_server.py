@@ -525,3 +525,25 @@ def test_search_line_numbers_multibyte(temp_db, tmp_path):
         assert len(results2) > 0
         assert "multibyte.txt:3" in results2[0]
 
+
+def test_search_crlf_offset(tmp_path):
+    d = tmp_path / "crlf_resources"
+    d.mkdir()
+    p = d / "crlf.txt"
+    with open(p, "wb") as f:
+        f.write(b"a\r\nb")
+    
+    server.index_directory(str(d))  # type: ignore
+    
+    # Search for "b"
+    results = server.search_documents("b")  # type: ignore
+    assert len(results) > 0
+    # Expected: Line 2. 
+    
+    line_found = False
+    for res in results:
+        if "crlf.txt:2" in res:
+            line_found = True
+    
+    assert line_found, "Could not find line 2 in results"
+

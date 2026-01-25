@@ -151,11 +151,14 @@ def _update_or_remove_file(file_path: str) -> str:
             try:
                 # 1. Read and Tokenize
                 # deepcode ignore PathTraversal: This is a local file indexing tool that must access user-specified files.
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, "r", encoding="utf-8", newline="") as f:
                     content = f.read()
                 
                 # Tokenize and get offsets
-                token_data = tokenize(content)
+                raw_token_data = tokenize(content)
+                # Filter out whitespace-only tokens (consistent with index_directory)
+                token_data = [t for t in raw_token_data if t[0].strip()]
+                
                 token_surfaces = [t[0] for t in token_data]
                 token_offsets = [t[1] for t in token_data]
                 
@@ -299,7 +302,7 @@ def index_directory(root_path: str) -> str:
                         if needs_update:
                             # 1. Read and Tokenize
                             # deepcode ignore PathTraversal: Validated path access
-                            with open(file_path, "r", encoding="utf-8") as f:
+                            with open(file_path, "r", encoding="utf-8", newline="") as f:
                                 content = f.read()
                             
                             # Tokenize and get offsets
