@@ -165,11 +165,9 @@ def _update_or_remove_file(file_path: str) -> str:
                 # Join tokens for FTS
                 tokens_str = " ".join(token_surfaces)
                 
-                # Pack offsets only (unsigned int, 4 bytes)
-                # 'I' is unsigned int (4 bytes). We use big-endian or native? Standard 'I' is typically 4 bytes.
-                # Use '<' for little-endian or '>' for big-endian to be explicit? '<' is standard for generic data.
-                # Actually, simple 'I'*len is fine if consistent.
-                packed_offsets = struct.pack(f"<{len(token_offsets)}I", *token_offsets)
+                # Pack offsets only (unsigned long long, 8 bytes) to support files > 4GB
+                # We use '<' for little-endian explicitly.
+                packed_offsets = struct.pack(f"<{len(token_offsets)}Q", *token_offsets)
                 
                 # 2. Update FTS
                 conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
@@ -314,7 +312,7 @@ def index_directory(root_path: str) -> str:
                             token_offsets = [t[1] for t in token_data]
                             
                             tokens_str = " ".join(token_surfaces)
-                            packed_offsets = struct.pack(f"<{len(token_offsets)}I", *token_offsets)
+                            packed_offsets = struct.pack(f"<{len(token_offsets)}Q", *token_offsets)
                             
                             # 2. Update FTS (Delete old entry if exists, then Insert)
                             with conn:
@@ -558,9 +556,25 @@ def search_documents(
                         # We assume tokens themselves do not contain spaces (which is true for our tokenizer surfaces)
                         token_index = len(preceding_text.split())
                         
-                        count_tokens = len(token_locations_blob) // 4
-                        if token_index < count_tokens:
-                            byte_offset = struct.unpack_from("<I", token_locations_blob, offset=token_index*4)[0]
+                        # Determine stride based on token count from stored tokens
+                        # row[2] is the 'tokens' column
+                        all_tokens_str = row[2]
+                        if not all_tokens_str:
+                            total_tokens = 0
+                        else:
+                            total_tokens = all_tokens_str.count(" ") + 1
+                        
+                        stride = 4
+                        if total_tokens > 0:
+                            calculated_stride = len(token_locations_blob) // total_tokens
+                            if calculated_stride in (4, 8):
+                                stride = calculated_stride
+                        
+                        if token_index < total_tokens:
+                            if stride == 8:
+                                byte_offset = struct.unpack_from("<Q", token_locations_blob, offset=token_index*8)[0]
+                            else:
+                                byte_offset = struct.unpack_from("<I", token_locations_blob, offset=token_index*4)[0]
                             
                             f.seek(0)
                             # Read up to offset to count newlines

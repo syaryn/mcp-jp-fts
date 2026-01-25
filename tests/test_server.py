@@ -547,3 +547,46 @@ def test_search_crlf_offset(tmp_path, temp_db):
     
     assert line_found, "Could not find line 2 in results"
 
+
+def test_legacy_4byte_compatibility(temp_db, tmp_path):
+    """Verify that we can still read 4-byte offset blobs (backward compatibility)"""
+    import sqlite3
+    import struct
+    
+    clean_dir = str(tmp_path / "legacy_resources")
+    os.makedirs(clean_dir)
+    file_path = os.path.join(clean_dir, "legacy.txt")
+    
+    # Content: "Hello World"
+    # Tokens: ["Hello", "World"]
+    # Offsets: "Hello" at 0, "World" at 6
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("Hello World")
+        
+    # Manually insert into DB with 4-byte packed offsets
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        conn = sqlite3.connect(temp_db)
+        
+        # 1. Insert FTS
+        conn.execute(
+            "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
+            (file_path, "Hello World", "Hello World")
+        )
+        
+        # 2. Insert Meta with 4-byte offsets
+        offsets = [0, 6]
+        packed_legacy = struct.pack(f"<{len(offsets)}I", *offsets)
+        
+        conn.execute(
+            "INSERT INTO documents_meta (path, mtime, scanned_at, token_locations) VALUES (?, ?, ?, ?)",
+            (file_path, os.path.getmtime(file_path), time.time(), packed_legacy)
+        )
+        conn.commit()
+        conn.close()
+        
+        # 3. Search should succeed
+        results = server.search_documents("World")
+        assert len(results) > 0
+        assert "legacy.txt:1" in results[0]
+        assert "Snippet" in results[0]
+
