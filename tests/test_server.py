@@ -20,7 +20,7 @@ with patch("fastmcp.FastMCP") as MockFastMCP:
     from mcp_jp_fts import server
 
 
-def test_tokenize(tokenizer_obj, split_mode):
+def test_tokenize():
     text = "吾輩は猫である"
     tokens = server.tokenize(text)
     
