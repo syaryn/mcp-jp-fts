@@ -533,7 +533,7 @@ def search_documents(
                     # Unpack blob
                     count = len(token_locations_blob) // 4
                     if token_index < count:
-                        original_byte_offset = struct.unpack_from(f"<I", token_locations_blob, offset=token_index*4)[0]
+                        original_byte_offset = struct.unpack_from("<I", token_locations_blob, offset=token_index*4)[0]
                         
                         # deepcode ignore PathTraversal: Validated path access
                         # deepcode ignore PathTraversal: Validated path access
