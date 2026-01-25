@@ -530,7 +530,7 @@ def search_documents(
                 match_indices.append(idx)
                 start = idx + len("{{{MATCH}}}")
             
-            print(f"DEBUG: path={path}, tokens={highlighted_tokens}", file=sys.stderr)
+
             
             # Limit matches per file to avoid huge output
             MAX_MATCHES_PER_FILE = 3
