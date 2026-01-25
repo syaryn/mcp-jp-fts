@@ -98,6 +98,7 @@ def _update_or_remove_file(file_path: str) -> str:
             
             try:
                 # 1. Read and Tokenize
+                # deepcode ignore PathTraversal: This is a local file indexing tool that must access user-specified files.
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
                 
@@ -190,6 +191,7 @@ def index_directory(root_path: str) -> str:
                 except Exception as e:
                     print(f"Failed to load .gitignore: {e}")
 
+            # deepcode ignore PathTraversal: This is a local file indexing tool that must walk user-specified trees.
             for dirpath, _, filenames in os.walk(root_path):
                 for filename in filenames:
                     if filename.startswith("."):
@@ -220,6 +222,7 @@ def index_directory(root_path: str) -> str:
                         
                         if needs_update:
                             # 1. Read and Tokenize
+                            # deepcode ignore PathTraversal: This is a local file indexing tool that must access user-specified files.
                             with open(file_path, "r", encoding="utf-8") as f:
                                 content = f.read()
                             
