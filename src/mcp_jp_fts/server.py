@@ -70,8 +70,15 @@ def validate_path(path: str) -> str:
     # but that is the intended feature of this tool.
     abs_path = os.path.abspath(path)
     cwd = os.getcwd()
-    if not abs_path.startswith(cwd):
-        raise ValueError(f"Access denied: Path {path} is outside the current working directory.")
+    
+    # Robust check using commonpath to avoid prefix tampering (like /foo vs /foobar)
+    try:
+        if os.path.commonpath([cwd, abs_path]) != cwd:
+            raise ValueError(f"Access denied: Path {path} is outside the current working directory.")
+    except ValueError:
+        # commonpath can raise ValueError on Windows if mixed drives are used
+        raise ValueError(f"Access denied: Path {path} is invalid/outside CWD.")
+
     return abs_path
 
 
