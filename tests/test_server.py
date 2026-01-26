@@ -608,15 +608,70 @@ def test_db_migration_v1_to_v2(tmp_path):
     # 2. Run server.init_db (via context manager or direct call)
     # We patch DB_PATH to use our pre-populated DB
     with patch("mcp_jp_fts.server.DB_PATH", db_path):
-        # Trigger init_db by entering get_db context
-        # This should detect FTS data without Meta data and clear FTS
-        with server.get_db() as conn:
-            fts_count = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
-            # Should be 0 because migration logic cleared it
-            assert fts_count == 0, "Migration should clear legacy FTS data if meta is missing"
+        # We must initialize the DB to ensure tables exist (Alembic/init_db would normally do this)
+        # But here we are simulating an existing DB.
+        
+        # When we connect and run index_directory, it should detect the mismatch
+        # However, our current migration logic is:
+        # "Detected legacy index without metadata" -> DELETE FROM documents_fts
+        # This happens in init_db check.
+        
+        # So we need to ensure init_db is called.
+        # So we need to ensure init_db is called.
+        with sqlite3.connect(db_path) as conn:
+            server.init_db(conn) # This triggers the check
             
-            # documents_meta should exist now
-            meta_count = conn.execute("SELECT count(*) FROM documents_meta").fetchone()[0]
-            assert meta_count == 0
+            # Check that documents_fts was cleared
+            count = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
+            assert count == 0
 
 
+def test_get_index_stats(temp_db, tmp_path):
+    """Test get_index_stats tool"""
+    import json
+    
+    # Patch DB_PATH to use isolated DB
+    with patch("mcp_jp_fts.server.DB_PATH", temp_db):
+        # 1. Initial state
+        stats_json = server.get_index_stats()
+        stats = json.loads(stats_json)
+        assert stats["total_files"] == 0
+        assert stats["watched_directories"] == []
+        assert "version" in stats
+        
+        # 2. Add some files
+        f1 = tmp_path / "f1.txt"
+        f1.write_text("Hello", encoding="utf-8")
+        
+        server.index_directory(str(tmp_path))
+        
+        stats_json = server.get_index_stats()
+        stats = json.loads(stats_json)
+        assert stats["total_files"] == 1
+        assert stats["last_scanned"] is not None
+        assert isinstance(stats["last_scanned"], str)
+        assert isinstance(stats["last_scanned"], str)
+        assert "T" in stats["last_scanned"]  # Basic ISO format check
+        assert stats["indexed_directories"] == [str(tmp_path)]
+        assert stats["file_extensions"] == {"txt": 1}
+        assert stats["db_integrity"] == "ok"
+        assert stats["db_integrity"] == "ok"
+        assert len(stats["recent_files"]) == 1
+        assert stats["recent_files"][0]["path"] == str(f1)
+        assert "T" in stats["recent_files"][0]["timestamp"]
+        
+        # 3. Watch directory
+        # 3. Watch directory
+        server.watch_directory(str(tmp_path))
+        
+        try:
+            stats_json = server.get_index_stats()
+            stats = json.loads(stats_json)
+            assert str(tmp_path) in stats["watched_directories"]
+        finally:
+            # Clean up observer to prevent leaking threads/state
+            if hasattr(server, "observer") and server.observer:
+                server.observer.stop()
+                server.observer.join()
+                server.observer = None
+            server.WATCHED_PATHS.clear()

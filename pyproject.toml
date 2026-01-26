@@ -35,3 +35,10 @@ ignore = ["E501"] # Ignore line length for comments
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+version_source = "tag"
+commit_message_options = { subject_label = "[skip ci] release" }
+build_command = "uv build"
+

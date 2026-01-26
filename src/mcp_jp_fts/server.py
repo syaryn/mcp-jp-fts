@@ -707,6 +707,83 @@ def watch_directory(root_path: str) -> str:
     return f"Started watching {root_path} for changes."
 
 
+
+
+@mcp.tool()
+def get_index_stats() -> str:
+    """
+    Get statistics about the current index and watched directories.
+    Returns a JSON string containing:
+    - total_files: Number of indexed files
+    - total_size_bytes: Size of the SQLite database file
+    - last_scanned: Timestamp of the most recent indexing operation
+    - watched_directories: List of directories currently being watched
+    """
+    stats = {
+        "version": "unknown",
+        "total_files": 0,
+        "total_size_bytes": 0,
+        "last_scanned": None,
+        "watched_directories": list(WATCHED_PATHS.keys())
+    }
+
+    try:
+        from importlib.metadata import version
+        stats["version"] = version("mcp-jp-fts")
+    except Exception:
+        pass
+    
+    with get_db() as conn:
+        # Get counts and timestamps
+        row = conn.execute("SELECT count(*), MAX(scanned_at) FROM documents_meta").fetchone()
+        if row:
+            stats["total_files"] = row[0]
+            if row[1]:
+                from datetime import datetime, timezone
+                # Convert unix timestamp to ISO 8601 string (UTC)
+                stats["last_scanned"] = datetime.fromtimestamp(row[1], tz=timezone.utc).isoformat()
+        
+        # Get list of unique directory paths containing indexed files
+        # Since we don't store "root" paths separately, we infer them from file paths.
+        path_rows = conn.execute("SELECT path FROM documents_meta").fetchall()
+        dirs = set()
+        ext_counts = {}
+        
+        for (p,) in path_rows:
+            dirs.add(os.path.dirname(p))
+            _, ext = os.path.splitext(p)
+            ext = ext.lstrip(".").lower() or "no_extension"
+            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+            
+        stats["indexed_directories"] = sorted(list(dirs))
+        stats["file_extensions"] = ext_counts
+        
+        # Integrity check
+        try:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            stats["db_integrity"] = integrity
+        except sqlite3.Error as e:
+            stats["db_integrity"] = str(e)
+            
+        # Get recently indexed files
+        recent_rows = conn.execute("SELECT path, scanned_at FROM documents_meta ORDER BY scanned_at DESC LIMIT 5").fetchall()
+        stats["recent_files"] = []
+        from datetime import datetime, timezone
+        for r in recent_rows:
+            entry = {"path": r[0]}
+            if r[1]:
+                entry["timestamp"] = datetime.fromtimestamp(r[1], tz=timezone.utc).isoformat()
+            stats["recent_files"].append(entry)
+            
+    # DB stats (calculated after DB init)
+    if os.path.exists(DB_PATH):
+        stats["total_size_bytes"] = os.path.getsize(DB_PATH)
+            
+    import json
+    return json.dumps(stats, ensure_ascii=False, indent=2)
+            
+    import json
+    return json.dumps(stats, ensure_ascii=False, indent=2)
 def main():
     mcp.run()
 
