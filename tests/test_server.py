@@ -586,6 +586,9 @@ def test_legacy_4byte_compatibility(temp_db, tmp_path):
         
         # 3. Search should succeed
         results = server.search_documents("World")
+        assert len(results) > 0
+        assert "legacy.txt:1" in results[0]
+        assert "Snippet" in results[0]
 
 def test_db_migration_v1_to_v2(tmp_path):
     """
