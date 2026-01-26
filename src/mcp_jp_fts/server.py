@@ -707,6 +707,37 @@ def watch_directory(root_path: str) -> str:
     return f"Started watching {root_path} for changes."
 
 
+
+
+@mcp.tool()
+def get_index_stats() -> str:
+    """
+    Get statistics about the current index and watched directories.
+    Returns a JSON string containing:
+    - total_files: Number of indexed files
+    - total_size_bytes: Size of the SQLite database file
+    - last_scanned: Timestamp of the most recent indexing operation
+    - watched_directories: List of directories currently being watched
+    """
+    stats = {
+        "total_files": 0,
+        "total_size_bytes": 0,
+        "last_scanned": None,
+        "watched_directories": list(WATCHED_PATHS.keys())
+    }
+    
+    # DB stats
+    if os.path.exists(DB_PATH):
+        stats["total_size_bytes"] = os.path.getsize(DB_PATH)
+        
+    with get_db() as conn:
+        row = conn.execute("SELECT count(*), MAX(scanned_at) FROM documents_meta").fetchone()
+        if row:
+            stats["total_files"] = row[0]
+            stats["last_scanned"] = row[1]
+            
+    import json
+    return json.dumps(stats, ensure_ascii=False, indent=2)
 def main():
     mcp.run()
 
