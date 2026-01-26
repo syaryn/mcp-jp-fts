@@ -2,8 +2,10 @@ import contextlib
 import html
 import os
 import sqlite3
+import struct
 import time
-from typing import List
+import sys
+from typing import List, Tuple, Any
 
 from fastmcp import FastMCP
 import pathspec
@@ -20,10 +22,42 @@ tokenizer_obj = dictionary.Dictionary().create()
 mode = tokenizer.Tokenizer.SplitMode.A
 
 
-def tokenize(text: str) -> str:
-    """Tokenize text using SudachiPy and return space-separated string."""
+def tokenize(text: str) -> List[Tuple[str, int]]:
+    """
+    Tokenize text using SudachiPy and return list of (surface, byte_offset) tuples.
+    """
     tokens = tokenizer_obj.tokenize(text, mode)
-    return " ".join([m.surface() for m in tokens])
+    # SudachiPy returns character offsets (m.begin()).
+    # We need UTF-8 byte offsets for file seeking and FTS mapping.
+    # Recalculating byte offsets based on the utf-8 encoded text.
+    
+    results = []
+    current_byte_offset = 0
+    current_char_offset = 0
+    
+    for m in tokens:
+        surface = m.surface()
+        # Calculate bytes skipped since last token (e.g. spaces)
+        # However, SudachiPy usually returns contiguous tokens unless we skip something.
+        # But to be safe, we use substring from last char position to current token start.
+        # Wait, m.begin() is absolute char index.
+        
+        # Optimization: Maintain running char/byte count if tokens are sequential.
+        # But simpler: Get substring from 0 to m.begin(), encode, len().
+        # For non-sequential access it could be slow O(N^2), but tokens are sequential.
+        
+        # Efficient approach:
+        # We know tokens come in order.
+        skipped_text = text[current_char_offset:m.begin()]
+        current_byte_offset += len(skipped_text.encode("utf-8"))
+        
+        results.append((surface, current_byte_offset))
+        
+        surface_len_bytes = len(surface.encode("utf-8"))
+        current_byte_offset += surface_len_bytes
+        current_char_offset = m.end()
+        
+    return results
 
 
 def validate_path(path: str) -> str:
@@ -34,7 +68,18 @@ def validate_path(path: str) -> str:
     # Simply resolving to absolute path is the main requirement for this local tool.
     # Snyk might still flag this as "Path Traversal" because we allow arbitrary file reads,
     # but that is the intended feature of this tool.
-    return os.path.abspath(path)
+    abs_path = os.path.abspath(path)
+    cwd = os.getcwd()
+    
+    # Robust check using commonpath to avoid prefix tampering (like /foo vs /foobar)
+    try:
+        if os.path.commonpath([cwd, abs_path]) != cwd:
+            raise ValueError(f"Access denied: Path {path} is outside the current working directory.")
+    except ValueError:
+        # commonpath can raise ValueError on Windows if mixed drives are used
+        raise ValueError(f"Access denied: Path {path} is invalid/outside CWD.")
+
+    return abs_path
 
 
 # Database Helper
@@ -44,15 +89,16 @@ DB_PATH = "documents.db"
 @contextlib.contextmanager
 def get_db():
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    init_db(conn)
     try:
         yield conn
     finally:
         conn.close()
 
 
-def init_db():
+def init_db(conn: sqlite3.Connection):
     """Initialize the SQLite database with a FTS5 virtual table."""
-    with get_db() as conn:
+    with conn:
         conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
                 path,
@@ -67,21 +113,39 @@ def init_db():
             CREATE TABLE IF NOT EXISTS documents_meta (
                 path TEXT PRIMARY KEY,
                 mtime REAL,
-                scanned_at REAL
+                scanned_at REAL,
+                token_locations BLOB
             );
         """)
+        
+        # Migration: Add token_locations column if it doesn't exist (for existing DBs)
+        try:
+            conn.execute("ALTER TABLE documents_meta ADD COLUMN token_locations BLOB")
+        except sqlite3.OperationalError:
+            # Column likely already exists
+            pass
+            
+        # Migration: If documents_fts has data but documents_meta is empty (e.g. upgraded from v1),
+        # we must clear documents_fts to force re-indexing.
+        # Otherwise, search_documents will fail to look up token maps.
+        fts_count = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
+        meta_count = conn.execute("SELECT count(*) FROM documents_meta").fetchone()[0]
+        
+        if fts_count > 0 and meta_count == 0:
+            print("Migration: Detected legacy index without metadata. Clearing index to force rebuild.", file=sys.stderr)
+            conn.execute("DELETE FROM documents_fts")
+            
         # Enable Write-Ahead Logging (WAL) for better concurrency
         conn.execute("PRAGMA journal_mode=WAL;")
         # Note: 'unicode61' is the default tokenizer which works well with space-separated tokens
 
 
-# Initialize DB on startup
-# Initialize DB on startup
-init_db()
+
 
 # Global Observer for Watch Mode
 observer = Observer()
-WATCHED_PATHS = set()
+# Store path -> FTSHandler to allow re-scheduling on observer restart
+WATCHED_PATHS = {}
 
 def _update_or_remove_file(file_path: str) -> str:
     """Internal helper to update or remove a file from index."""
@@ -99,29 +163,43 @@ def _update_or_remove_file(file_path: str) -> str:
             try:
                 # 1. Read and Tokenize
                 # deepcode ignore PathTraversal: This is a local file indexing tool that must access user-specified files.
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(file_path, "r", encoding="utf-8", newline="") as f:
                     content = f.read()
                 
-                tokens = tokenize(content)
+                # Tokenize and get offsets
+                raw_token_data = tokenize(content)
+                # Filter out whitespace-only tokens (consistent with index_directory)
+                token_data = [t for t in raw_token_data if t[0].strip()]
+                
+                token_surfaces = [t[0] for t in token_data]
+                token_offsets = [t[1] for t in token_data]
+                
+                # Join tokens for FTS
+                tokens_str = " ".join(token_surfaces)
+                
+                # Pack offsets only (unsigned long long, 8 bytes) to support files > 4GB
+                # We use '<' for little-endian explicitly.
+                packed_offsets = struct.pack(f"<{len(token_offsets)}Q", *token_offsets)
                 
                 # 2. Update FTS
                 conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
                 conn.execute(
                     "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
-                    (file_path, content, tokens),
+                    (file_path, content, tokens_str),
                 )
                 
                 # 3. Update Metadata
                 file_mtime = os.path.getmtime(file_path)
                 conn.execute(
                     """
-                    INSERT INTO documents_meta (path, mtime, scanned_at) 
-                    VALUES (?, ?, ?)
+                    INSERT INTO documents_meta (path, mtime, scanned_at, token_locations) 
+                    VALUES (?, ?, ?, ?)
                     ON CONFLICT(path) DO UPDATE SET
                         mtime = excluded.mtime,
-                        scanned_at = excluded.scanned_at
+                        scanned_at = excluded.scanned_at,
+                        token_locations = excluded.token_locations
                     """,
-                    (file_path, file_mtime, current_time)
+                    (file_path, file_mtime, current_time, packed_offsets)
                 )
                 return f"Updated {file_path} in index."
 
@@ -180,7 +258,8 @@ def index_directory(root_path: str) -> str:
     skipped_count = 0
     
     with get_db() as conn:
-        with conn:
+        # We manually manage transactions (commits) inside the loop for concurrency
+        # with conn:  <-- Removed monolithic transaction block
             # Load .gitignore if exists
             gitignore_path = os.path.join(root_path, ".gitignore")
             ignore_spec = None
@@ -189,9 +268,15 @@ def index_directory(root_path: str) -> str:
                     with open(gitignore_path, "r", encoding="utf-8") as f:
                         ignore_spec = pathspec.PathSpec.from_lines("gitignore", f)
                 except Exception as e:
-                    print(f"Failed to load .gitignore: {e}")
+                    print(f"Failed to load .gitignore: {e}", file=sys.stderr)
 
             # deepcode ignore PathTraversal: This is a local file indexing tool that must walk user-specified trees.
+            current_files = set()
+            
+            # Batch commit configuration
+            BATCH_SIZE = 50
+            pending_updates = 0
+
             for dirpath, _, filenames in os.walk(root_path):
                 for filename in filenames:
                     if filename.startswith("."):
@@ -203,6 +288,10 @@ def index_directory(root_path: str) -> str:
                         rel_path = os.path.relpath(file_path, root_path)
                         if ignore_spec.match_file(rel_path):
                             continue
+                            
+                    # Add to current_files set
+                    abs_path = validate_path(file_path)
+                    current_files.add(abs_path)
 
                     try:
                         # Get file mtime
@@ -222,38 +311,62 @@ def index_directory(root_path: str) -> str:
                         
                         if needs_update:
                             # 1. Read and Tokenize
-                            # deepcode ignore PathTraversal: This is a local file indexing tool that must access user-specified files.
-                            with open(file_path, "r", encoding="utf-8") as f:
+                            # deepcode ignore PathTraversal: Validated path access
+                            with open(file_path, "r", encoding="utf-8", newline="") as f:
                                 content = f.read()
                             
-                            tokens = tokenize(content)
+                            # Tokenize and get offsets
+                            raw_token_data = tokenize(content)
+                            # Filter out whitespace-only tokens (newlines, spaces) which mess up token counting
+                            token_data = [t for t in raw_token_data if t[0].strip()]
+                            
+                            token_surfaces = [t[0] for t in token_data]
+                            token_offsets = [t[1] for t in token_data]
+                            
+                            tokens_str = " ".join(token_surfaces)
+                            packed_offsets = struct.pack(f"<{len(token_offsets)}Q", *token_offsets)
                             
                             # 2. Update FTS (Delete old entry if exists, then Insert)
-                            conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
-                            conn.execute(
-                                "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
-                                (file_path, content, tokens),
-                            )
+                            with conn:
+                                conn.execute("DELETE FROM documents_fts WHERE path = ?", (file_path,))
+                                conn.execute(
+                                    "INSERT INTO documents_fts (path, content, tokens) VALUES (?, ?, ?)",
+                                    (file_path, content, tokens_str),
+                                )
+                                # 3. Update Metadata (mtime and scanned_at)
+                                conn.execute(
+                                    """
+                                    INSERT INTO documents_meta (path, mtime, scanned_at, token_locations) 
+                                    VALUES (?, ?, ?, ?)
+                                    ON CONFLICT(path) DO UPDATE SET
+                                        mtime = excluded.mtime,
+                                        scanned_at = excluded.scanned_at,
+                                        token_locations = excluded.token_locations
+                                    """,
+                                    (file_path, file_mtime, current_time, packed_offsets)
+                                )
                             updated_count += 1
+
                         else:
                             skipped_count += 1
-
-                        # 3. Update Metadata (mtime and scanned_at)
-                        conn.execute(
-                            """
-                            INSERT INTO documents_meta (path, mtime, scanned_at) 
-                            VALUES (?, ?, ?)
-                            ON CONFLICT(path) DO UPDATE SET
-                                mtime = excluded.mtime,
-                                scanned_at = excluded.scanned_at
-                            """,
-                            (file_path, file_mtime, current_time)
-                        )
+                            # Update scanned_at even if skipped, so it's not marked as stale
+                            with conn:
+                                conn.execute(
+                                    "UPDATE documents_meta SET scanned_at = ? WHERE path = ?",
+                                    (current_time, file_path)
+                                )
+                        
+                        # Use explicit transaction commit for batches to avoid locking the DB for too long
+                        if updated_count > 0 and updated_count % BATCH_SIZE == 0:
+                            conn.commit()
 
                     except UnicodeDecodeError:
                         continue
                     except Exception as e:
-                        print(f"Failed to process {file_path}: {e}")
+                        print(f"Failed to process {file_path}: {e}", file=sys.stderr)
+            
+            # Commit any remaining updates
+            conn.commit()
 
             # 4. Cleanup Stale Entries
             # Delete files under root_path that were NOT scanned in this pass
@@ -263,21 +376,22 @@ def index_directory(root_path: str) -> str:
             search_pattern = root_path if root_path.endswith(os.sep) else root_path + os.sep
             search_pattern = search_pattern + "%"
             
-            # Find stale paths
-            cursor = conn.execute(
-                """
-                SELECT path FROM documents_meta 
-                WHERE (path = ? OR path LIKE ?) AND scanned_at < ?
-                """,
-                (root_path, search_pattern, current_time)
-            )
-            stale_paths = [r[0] for r in cursor]
+            # Cleanup stale entries atomically and efficiently
+            with conn:
+                conn.execute(
+                    """
+                    DELETE FROM documents_fts
+                    WHERE path IN (SELECT path FROM documents_meta WHERE (path = ? OR path LIKE ?) AND scanned_at < ?)
+                    """,
+                    (root_path, search_pattern, current_time)
+                )
+                cursor_meta = conn.execute(
+                    "DELETE FROM documents_meta WHERE (path = ? OR path LIKE ?) AND scanned_at < ?",
+                    (root_path, search_pattern, current_time)
+                )
+                conn.commit()
             
-            for path in stale_paths:
-                conn.execute("DELETE FROM documents_fts WHERE path = ?", (path,))
-                conn.execute("DELETE FROM documents_meta WHERE path = ?", (path,))
-            
-            deleted_count = len(stale_paths)
+            deleted_count = cursor_meta.rowcount
 
     return f"Indexed {updated_count} files, Skipped {skipped_count} unchanged, Deleted {deleted_count} stale in {root_path}."
 
@@ -330,15 +444,33 @@ def search_documents(
         path_filter: Only return results under this path
         extensions: List of file extensions to include (e.g., [".py", ".md"])
     """
-    # Tokenize the query to match the indexed format
-    query_tokens = tokenize(query)
-    fts_query = query_tokens
 
-    results = []
+    # Tokenize the query to match the indexed format
+    query_token_data = tokenize(query)
+    # Extract surfaces for FTS MATCH query
+    # Sanitize tokens: Escape double quotes and wrap in double quotes to treat as string literals
+    # This prevents FTS5 syntax injection (e.g. *, OR, NEAR, :, etc. inside words)
+    safe_surfaces = []
+    for t in query_token_data:
+        surface = t[0]
+        # Escape existing quotes by doubling them (standard SQL/FTS escaping)
+        surface_escaped = surface.replace('"', '""')
+        safe_surfaces.append(f'"{surface_escaped}"')
+    
+    if not safe_surfaces:
+        return ["No matches found."]
+
+    fts_query = " ".join(safe_surfaces)
     with get_db() as conn:
+        # XSS Remediation: ...
         # XSS Remediation: Use safe placeholders for highlighting, then escape and replace in Python
+        # Use offsets() to find which token matched
+        # Note: We fetch tokens to count spaces for term index
         sql = """
-            SELECT path, snippet(documents_fts, 1, '{{{MATCH}}}', '{{{/MATCH}}}', '...', 64) 
+            SELECT 
+                path, 
+                highlight(documents_fts, 2, '{{{MATCH}}}', '{{{/MATCH}}}'), 
+                tokens
             FROM documents_fts 
             WHERE tokens MATCH ? 
         """
@@ -370,18 +502,122 @@ def search_documents(
         params.append(limit)
 
         cursor = conn.execute(sql, params)
+        rows = list(cursor)
+        
+        if not rows:
+            return ["No matches found."]
+            
+        # Fetch Token Maps for the found paths
+        # Optimization: Batch fetch
+        found_paths = [r[0] for r in rows]
+        
+        placeholders = ",".join(["?"] * len(found_paths))
+        meta_cursor = conn.execute(
+            f"SELECT path, token_locations FROM documents_meta WHERE path IN ({placeholders})",
+            found_paths
+        )
+        token_map_lookup = {r[0]: r[1] for r in meta_cursor}
 
-        for row in cursor:
+        results = []
+        for row in rows:
             path = row[0]
-            raw_snippet = row[1]
+            # row[1] is highlight(...)
+            highlighted_tokens = row[1]
             
-            # Escape the entire string first (sanitizing malicious scripts)
-            safe_snippet = html.escape(raw_snippet)
+            # Lookup token locations map
+            token_locations_blob = token_map_lookup.get(path)
             
-            # Restore the highlighting tags
-            final_snippet = safe_snippet.replace("{{{MATCH}}}", "<b>").replace("{{{/MATCH}}}", "</b>")
+            if not token_locations_blob:
+                # Should not happen if index is consistent
+                continue
+
+            # Find all matches in highlighted_tokens
+            # Search for {{{MATCH}}}
+            # We need to find ALL start indices of {{{MATCH}}}
+            match_indices = []
+            start = 0
+            while True:
+                idx = highlighted_tokens.find("{{{MATCH}}}", start)
+                if idx == -1:
+                    break
+                match_indices.append(idx)
+                start = idx + len("{{{MATCH}}}")
             
-            results.append(f"File: {path}\nSnippet: {final_snippet}\n")
+
+            
+            # Limit matches per file to avoid huge output
+            MAX_MATCHES_PER_FILE = 3
+            match_indices = match_indices[:MAX_MATCHES_PER_FILE]
+
+            try:
+                with open(path, "rb") as f:
+                    for match_start in match_indices:
+                        # Calculate token index
+                        preceding_text = highlighted_tokens[:match_start]
+                        # Count spaces to get token index
+                        # Note: highlighted_tokens contains match tags, but since we scan left-to-right,
+                        # and we strip tags, or wait...
+                        # If we have multiple matches: "A {{{MATCH}}}B{{{/MATCH}}} C {{{MATCH}}}D{{{/MATCH}}}"
+                        # match_start for D is after B.
+                        # preceding_text for D includes "A {{{MATCH}}}B{{{/MATCH}}} C "
+                        # We must treat {{{MATCH}}} and {{{/MATCH}}} as transparent or NOT?
+                        # ACTUALLY: The tokens column is space-separated surfaces.
+                        # highlight() just wraps the surfaces.
+                        
+                        # Use split() to count tokens robustly (ignoring multiple spaces)
+                        # We assume tokens themselves do not contain spaces (which is true for our tokenizer surfaces)
+                        token_index = len(preceding_text.split())
+                        
+                        # Determine stride based on token count from stored tokens
+                        # row[2] is the 'tokens' column
+                        all_tokens_str = row[2]
+                        if not all_tokens_str:
+                            total_tokens = 0
+                        else:
+                            total_tokens = all_tokens_str.count(" ") + 1
+                        
+                        stride = 4
+                        if total_tokens > 0:
+                            calculated_stride = len(token_locations_blob) // total_tokens
+                            if calculated_stride in (4, 8):
+                                stride = calculated_stride
+                        
+                        if token_index < total_tokens:
+                            if stride == 8:
+                                byte_offset = struct.unpack_from("<Q", token_locations_blob, offset=token_index*8)[0]
+                            else:
+                                byte_offset = struct.unpack_from("<I", token_locations_blob, offset=token_index*4)[0]
+                            
+                            f.seek(0)
+                            # Read up to offset to count newlines
+                            prefix = f.read(byte_offset)
+                            line_number = prefix.count(b"\n") + 1
+                            
+                            # Read Snippet Context (e.g. 50 bytes before and after)
+                            # Be careful with UTF-8 distinct chars
+                            context_start = max(0, byte_offset - 50)
+                            context_len = 100 # Read 100 bytes approx
+                            f.seek(context_start)
+                            snippet_bytes = f.read(context_len)
+                            
+                            # Decode responsibly (replace errors)
+                            snippet_str = snippet_bytes.decode("utf-8", errors="replace")
+                            
+                            # Sanitize HTML
+                            safe_snippet = html.escape(snippet_str)
+                            
+                            # Highlight the match term roughly (simple string match might be wrong if multiple same words)
+                            # But since we don't have exact length of the token in bytes easily available here without more logic,
+                            # We can just show the plain snippet or try to highlight.
+                            # For now, let's trusting the offset line number is the most value.
+                            # We can refine snippet later if needed.
+                            # Just surrounding the whole snippet with "..."
+                            
+                            results.append(f"File: {path}:{line_number}\nSnippet: ...{safe_snippet}...\n")
+
+            except (IOError, OSError, ValueError):
+                continue
+
 
     if not results:
         return ["No matches found."]
@@ -432,33 +668,44 @@ def watch_directory(root_path: str) -> str:
             with open(gitignore_path, "r", encoding="utf-8") as f:
                 ignore_spec = pathspec.PathSpec.from_lines("gitignore", f)
         except Exception as e:
-            print(f"Failed to load .gitignore: {e}")
+            print(f"Failed to load .gitignore: {e}", file=sys.stderr)
 
     handler = FTSHandler(root_path, ignore_spec)
     
-    # Check if already watching to avoid duplicates
-    if root_path in WATCHED_PATHS:
-        return f"Already watching {root_path}"
-
-    WATCHED_PATHS.add(root_path)
-    
     global observer
-    if observer is None:
+    
+    # Check observer health first
+    # Reschedule all existing valid watches + the new one
+    if observer is None or not observer.is_alive():
+        if observer is not None:
+             # Observer existed but died.
+             pass 
+        
+        # Create new observer
         observer = Observer()
         
+        # Reschedule all existing valid watches
+        # Note: WATCHED_PATHS is now a dict {path: handler}
+        for path, h in WATCHED_PATHS.items():
+            if os.path.exists(path):
+                try:
+                    observer.schedule(h, path, recursive=True)
+                except Exception as e:
+                    print(f"Failed to restore watch for {path}: {e}", file=sys.stderr)
+            else:
+                # Path might have been deleted while observer was down
+                pass
+        
+    # Check if already watching to avoid duplicates
+    if root_path in WATCHED_PATHS:
+        # Update handler (e.g. if gitignore changed)? 
+        return f"Already watching {root_path}"
+
+    WATCHED_PATHS[root_path] = handler
+        
     try:
-        # If observer was stopped (e.g. in tests), we need a new instance
-        # Thread/Observer cannot be restarted once stopped.
-        # There is no public API to check if it's "stopped" vs "never started" easily without accessing internals
-        # or tracking state ourselves. 
-        # But commonly if is_alive() is False but we want to schedule, we might need to check.
         if not observer.is_alive():
-            try:
-                observer.start()
-            except RuntimeError:
-                # Threads can only be started once. If it was stopped, create new.
-                observer = Observer()
-                observer.start()
+            observer.start()
 
         observer.schedule(handler, root_path, recursive=True)
 

@@ -8,6 +8,9 @@ A Model Context Protocol (MCP) server for Japanese full-text search using **Fast
 
 - **Japanese Full-Text Search**: Uses SudachiPy (Mode A) to properly tokenize Japanese text for high-precision search
 - **Local File Indexing**: Recursively scans directories to index text files
+- **Precise Line Number Resolution**: Accurately identifies line numbers for matches, even with complex Japanese tokenization
+- **Extension Filtering**: Search results can be filtered by specific file extensions (e.g., `.py`, `.md`)
+- **.gitignore Support**: Respects `.gitignore` files to exclude unwanted files from indexing
 - **Atomic Updates**: Automatically removes entries for deleted files when re-indexing a directory to keep the index clean
 - **FastMCP Integration**: Exposes `index_directory` and `search_documents` as MCP tools
 
@@ -25,6 +28,7 @@ When compared to traditional grep-based file searches performed by LLMs, this fu
 **With this server:**
 - Word-level tokenization using SudachiPy morphological analysis
 - Understands Japanese linguistic structure for more accurate searches
+- **Accurate Line Numbers**: Uses a token mapping strategy to determine the exact line number of the match, unlike simple string searching which fails with tokenized text
 - Tokenization provides higher precision search results
 
 ### 2. Fast Search Through Indexing
@@ -173,10 +177,10 @@ Indexes all text files in the specified path.
 
 **Output example:**
 ```
-Indexed 42 files in /path/to/docs (Previous entries cleared).
+Indexed 42 files, Skipped 0 unchanged, Deleted 5 stale in /path/to/docs.
 ```
 
-**Note:** Clears the existing index for this path before adding new data.
+**Note:** Performs an incremental update. Only changed files are re-indexed, and deleted files are removed.
 
 #### `search_documents`
 
@@ -193,10 +197,10 @@ Searches indexed documents using SudachiPy tokenization.
 
 **Output example:**
 ```
-File: /path/to/wagahai.txt
+File: /path/to/wagahai.txt:1
 Snippet: 吾輩は<b>猫</b>である...
 
-File: /path/to/other.txt
+File: /path/to/other.txt:15
 Snippet: この<b>猫</b>は...
 ```
 
@@ -220,6 +224,28 @@ Returns a list of currently indexed files.
 {
   "limit": 10,
   "offset": 0
+}
+```
+
+#### `update_file`
+
+Update the index for a single file. (Re-indexes if exists, removes if deleted).
+
+**Input:**
+```json
+{
+  "file_path": "/path/to/docs/new_doc.txt"
+}
+```
+
+#### `watch_directory`
+
+Start watching a directory for file changes and automatically update the index in real-time.
+
+**Input:**
+```json
+{
+  "root_path": "/path/to/docs"
 }
 ```
 

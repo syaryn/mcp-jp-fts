@@ -18,3 +18,21 @@ lock-check = "uv lock --check"
 check = { depends = ["lint", "type", "test", "lock-check"] }
 scan = "osv-scanner -r ."
 scan-license = "osv-scanner --licenses='BSD-3-Clause,Apache-2.0,MIT,PSF-2.0,MPL-2.0,ISC,BSD-2-Clause,Unlicense' -r ."
+
+# GitHub CLI tasks
+pr-create = "gh pr create \"$@\""
+pr-list = "gh pr list \"$@\""
+pr-view = "gh pr view \"$@\""
+pr-comments = "gh pr view \"$@\" --json comments,reviews"
+pr-checkout = "gh pr checkout \"$@\""
+pr-merge = "gh pr merge \"$@\""
+repo-view = "gh repo view \"$@\""
+browse = "gh browse \"$@\""
+
+# Git aliases
+add = "git add \"$@\""
+commit = "git commit \"$@\""
+push = "git push \"$@\""
+pull = "git pull \"$@\""
+status = "git status \"$@\""
+checkout = "git checkout \"$@\""

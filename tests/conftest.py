@@ -1,6 +1,7 @@
 import os
 import shutil
 import sqlite3
+from unittest.mock import patch
 
 import pytest
 from sudachipy import dictionary, tokenizer
@@ -15,6 +16,16 @@ def tokenizer_obj():
 @pytest.fixture(scope="session")
 def split_mode():
     return tokenizer.Tokenizer.SplitMode.A
+
+
+@pytest.fixture(autouse=True)
+def mock_cwd(tmp_path):
+    """
+    Mock os.getcwd() to return the temporary directory for each test.
+    This ensures that security checks dependent on CWD pass for temp files.
+    """
+    with patch("os.getcwd", return_value=str(tmp_path)):
+        yield
 
 
 @pytest.fixture
@@ -38,7 +49,8 @@ def temp_db(tmp_path):
         CREATE TABLE documents_meta (
             path TEXT PRIMARY KEY,
             mtime REAL,
-            scanned_at REAL
+            scanned_at REAL,
+            token_locations BLOB
         );
     """)
     conn.close()
