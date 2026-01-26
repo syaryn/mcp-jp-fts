@@ -652,6 +652,8 @@ def test_get_index_stats(temp_db, tmp_path):
         assert isinstance(stats["last_scanned"], str)
         assert "T" in stats["last_scanned"]  # Basic ISO format check
         assert stats["indexed_directories"] == [str(tmp_path)]
+        assert stats["file_extensions"] == {"txt": 1}
+        assert stats["db_integrity"] == "ok"
         
         # 3. Watch directory
         server.watch_directory(str(tmp_path))

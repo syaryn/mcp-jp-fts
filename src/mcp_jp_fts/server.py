@@ -744,9 +744,23 @@ def get_index_stats() -> str:
         # Since we don't store "root" paths separately, we infer them from file paths.
         path_rows = conn.execute("SELECT path FROM documents_meta").fetchall()
         dirs = set()
+        ext_counts = {}
+        
         for (p,) in path_rows:
             dirs.add(os.path.dirname(p))
+            _, ext = os.path.splitext(p)
+            ext = ext.lstrip(".").lower() or "no_extension"
+            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+            
         stats["indexed_directories"] = sorted(list(dirs))
+        stats["file_extensions"] = ext_counts
+        
+        # Integrity check
+        try:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+            stats["db_integrity"] = integrity
+        except Exception as e:
+            stats["db_integrity"] = str(e)
             
     import json
     return json.dumps(stats, ensure_ascii=False, indent=2)
