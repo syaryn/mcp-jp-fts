@@ -66,20 +66,11 @@ def validate_path(path: str) -> str:
     Prevents basics of path traversal by ensuring we work with resolved paths.
     """
     # Simply resolving to absolute path is the main requirement for this local tool.
-    # Snyk might still flag this as "Path Traversal" because we allow arbitrary file reads,
-    # but that is the intended feature of this tool.
+    # We allow access to paths outside CWD to enable indexing arbitrary directories.
     abs_path = os.path.abspath(path)
-    cwd = os.getcwd()
-    
-    # Robust check using commonpath to avoid prefix tampering (like /foo vs /foobar)
-    try:
-        if os.path.commonpath([cwd, abs_path]) != cwd:
-            raise ValueError(f"Access denied: Path {path} is outside the current working directory.")
-    except ValueError:
-        # commonpath can raise ValueError on Windows if mixed drives are used
-        raise ValueError(f"Access denied: Path {path} is invalid/outside CWD.")
-
     return abs_path
+
+
 
 
 # Database Helper
