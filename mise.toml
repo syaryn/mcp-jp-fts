@@ -23,6 +23,7 @@ scan-license = "osv-scanner --licenses='BSD-3-Clause,Apache-2.0,MIT,PSF-2.0,MPL-
 pr-create = "gh pr create \"$@\""
 pr-list = "gh pr list \"$@\""
 pr-view = "gh pr view \"$@\""
+pr-comments = "gh pr view \"$@\" --json comments,reviews"
 pr-checkout = "gh pr checkout \"$@\""
 pr-merge = "gh pr merge \"$@\""
 repo-view = "gh repo view \"$@\""
