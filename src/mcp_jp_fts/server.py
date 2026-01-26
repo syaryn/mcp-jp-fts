@@ -731,6 +731,7 @@ def get_index_stats() -> str:
         stats["total_size_bytes"] = os.path.getsize(DB_PATH)
         
     with get_db() as conn:
+        # Get counts and timestamps
         row = conn.execute("SELECT count(*), MAX(scanned_at) FROM documents_meta").fetchone()
         if row:
             stats["total_files"] = row[0]
@@ -738,6 +739,14 @@ def get_index_stats() -> str:
                 from datetime import datetime
                 # Convert unix timestamp to ISO 8601 string
                 stats["last_scanned"] = datetime.fromtimestamp(row[1]).isoformat()
+        
+        # Get list of unique directory paths containing indexed files
+        # Since we don't store "root" paths separately, we infer them from file paths.
+        path_rows = conn.execute("SELECT path FROM documents_meta").fetchall()
+        dirs = set()
+        for (p,) in path_rows:
+            dirs.add(os.path.dirname(p))
+        stats["indexed_directories"] = sorted(list(dirs))
             
     import json
     return json.dumps(stats, ensure_ascii=False, indent=2)
