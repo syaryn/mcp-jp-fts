@@ -733,19 +733,15 @@ def get_index_stats() -> str:
     except Exception:
         pass
     
-    # DB stats
-    if os.path.exists(DB_PATH):
-        stats["total_size_bytes"] = os.path.getsize(DB_PATH)
-        
     with get_db() as conn:
         # Get counts and timestamps
         row = conn.execute("SELECT count(*), MAX(scanned_at) FROM documents_meta").fetchone()
         if row:
             stats["total_files"] = row[0]
             if row[1]:
-                from datetime import datetime
-                # Convert unix timestamp to ISO 8601 string
-                stats["last_scanned"] = datetime.fromtimestamp(row[1]).isoformat()
+                from datetime import datetime, timezone
+                # Convert unix timestamp to ISO 8601 string (UTC)
+                stats["last_scanned"] = datetime.fromtimestamp(row[1], tz=timezone.utc).isoformat()
         
         # Get list of unique directory paths containing indexed files
         # Since we don't store "root" paths separately, we infer them from file paths.
@@ -766,18 +762,25 @@ def get_index_stats() -> str:
         try:
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
             stats["db_integrity"] = integrity
-        except Exception as e:
+        except sqlite3.Error as e:
             stats["db_integrity"] = str(e)
             
         # Get recently indexed files
         recent_rows = conn.execute("SELECT path, scanned_at FROM documents_meta ORDER BY scanned_at DESC LIMIT 5").fetchall()
         stats["recent_files"] = []
-        from datetime import datetime
+        from datetime import datetime, timezone
         for r in recent_rows:
             entry = {"path": r[0]}
             if r[1]:
-                entry["timestamp"] = datetime.fromtimestamp(r[1]).isoformat()
+                entry["timestamp"] = datetime.fromtimestamp(r[1], tz=timezone.utc).isoformat()
             stats["recent_files"].append(entry)
+            
+    # DB stats (calculated after DB init)
+    if os.path.exists(DB_PATH):
+        stats["total_size_bytes"] = os.path.getsize(DB_PATH)
+            
+    import json
+    return json.dumps(stats, ensure_ascii=False, indent=2)
             
     import json
     return json.dumps(stats, ensure_ascii=False, indent=2)

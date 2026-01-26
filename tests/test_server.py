@@ -617,13 +617,13 @@ def test_db_migration_v1_to_v2(tmp_path):
         # This happens in init_db check.
         
         # So we need to ensure init_db is called.
-        conn = sqlite3.connect(db_path)
-        server.init_db(conn) # This triggers the check
-        
-        # Check that documents_fts was cleared
-        count = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
-        assert count == 0
-        conn.close()
+        # So we need to ensure init_db is called.
+        with sqlite3.connect(db_path) as conn:
+            server.init_db(conn) # This triggers the check
+            
+            # Check that documents_fts was cleared
+            count = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
+            assert count == 0
 
 
 def test_get_index_stats(temp_db, tmp_path):
@@ -661,8 +661,17 @@ def test_get_index_stats(temp_db, tmp_path):
         assert "T" in stats["recent_files"][0]["timestamp"]
         
         # 3. Watch directory
+        # 3. Watch directory
         server.watch_directory(str(tmp_path))
         
-        stats_json = server.get_index_stats()
-        stats = json.loads(stats_json)
-        assert str(tmp_path) in stats["watched_directories"]
+        try:
+            stats_json = server.get_index_stats()
+            stats = json.loads(stats_json)
+            assert str(tmp_path) in stats["watched_directories"]
+        finally:
+            # Clean up observer to prevent leaking threads/state
+            if hasattr(server, "observer") and server.observer:
+                server.observer.stop()
+                server.observer.join()
+                server.observer = None
+            server.WATCHED_PATHS.clear()
