@@ -124,6 +124,17 @@ def init_db(conn: sqlite3.Connection):
         except sqlite3.OperationalError:
             # Column likely already exists
             pass
+            
+        # Migration: If documents_fts has data but documents_meta is empty (e.g. upgraded from v1),
+        # we must clear documents_fts to force re-indexing.
+        # Otherwise, search_documents will fail to look up token maps.
+        fts_count = conn.execute("SELECT count(*) FROM documents_fts").fetchone()[0]
+        meta_count = conn.execute("SELECT count(*) FROM documents_meta").fetchone()[0]
+        
+        if fts_count > 0 and meta_count == 0:
+            print("Migration: Detected legacy index without metadata. Clearing index to force rebuild.", file=sys.stderr)
+            conn.execute("DELETE FROM documents_fts")
+            
         # Enable Write-Ahead Logging (WAL) for better concurrency
         conn.execute("PRAGMA journal_mode=WAL;")
         # Note: 'unicode61' is the default tokenizer which works well with space-separated tokens
