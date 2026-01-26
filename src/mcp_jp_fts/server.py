@@ -734,7 +734,10 @@ def get_index_stats() -> str:
         row = conn.execute("SELECT count(*), MAX(scanned_at) FROM documents_meta").fetchone()
         if row:
             stats["total_files"] = row[0]
-            stats["last_scanned"] = row[1]
+            if row[1]:
+                from datetime import datetime
+                # Convert unix timestamp to ISO 8601 string
+                stats["last_scanned"] = datetime.fromtimestamp(row[1]).isoformat()
             
     import json
     return json.dumps(stats, ensure_ascii=False, indent=2)

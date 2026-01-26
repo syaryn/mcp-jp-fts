@@ -648,6 +648,8 @@ def test_get_index_stats(temp_db, tmp_path):
         stats = json.loads(stats_json)
         assert stats["total_files"] == 1
         assert stats["last_scanned"] is not None
+        assert isinstance(stats["last_scanned"], str)
+        assert "T" in stats["last_scanned"]  # Basic ISO format check
         
         # 3. Watch directory
         server.watch_directory(str(tmp_path))
