@@ -655,6 +655,7 @@ def test_get_index_stats(temp_db, tmp_path):
         assert stats["indexed_directories"] == [str(tmp_path)]
         assert stats["file_extensions"] == {"txt": 1}
         assert stats["db_integrity"] == "ok"
+        assert stats["recent_files"] == [str(f1)]
         
         # 3. Watch directory
         server.watch_directory(str(tmp_path))

@@ -769,6 +769,10 @@ def get_index_stats() -> str:
         except Exception as e:
             stats["db_integrity"] = str(e)
             
+        # Get recently indexed files
+        recent_rows = conn.execute("SELECT path FROM documents_meta ORDER BY scanned_at DESC LIMIT 5").fetchall()
+        stats["recent_files"] = [r[0] for r in recent_rows]
+            
     import json
     return json.dumps(stats, ensure_ascii=False, indent=2)
 def main():
