@@ -144,7 +144,8 @@ def init_db(conn: sqlite3.Connection):
 
 # Global Observer for Watch Mode
 observer = Observer()
-WATCHED_PATHS = set()
+# Store path -> FTSHandler to allow re-scheduling on observer restart
+WATCHED_PATHS = {}
 
 def _update_or_remove_file(file_path: str) -> str:
     """Internal helper to update or remove a file from index."""
@@ -674,21 +675,33 @@ def watch_directory(root_path: str) -> str:
     global observer
     
     # Check observer health first
-    # If observer is dead, we must restart it AND clear the watched paths,
-    # because the new observer has no schedules.
+    # Reschedule all existing valid watches + the new one
     if observer is None or not observer.is_alive():
         if observer is not None:
-             # Observer existed but died. Clear stale state.
-             WATCHED_PATHS.clear()
+             # Observer existed but died.
+             pass 
         
         # Create new observer
         observer = Observer()
         
+        # Reschedule all existing valid watches
+        # Note: WATCHED_PATHS is now a dict {path: handler}
+        for path, h in WATCHED_PATHS.items():
+            if os.path.exists(path):
+                try:
+                    observer.schedule(h, path, recursive=True)
+                except Exception as e:
+                    print(f"Failed to restore watch for {path}: {e}", file=sys.stderr)
+            else:
+                # Path might have been deleted while observer was down
+                pass
+        
     # Check if already watching to avoid duplicates
     if root_path in WATCHED_PATHS:
+        # Update handler (e.g. if gitignore changed)? 
         return f"Already watching {root_path}"
 
-    WATCHED_PATHS.add(root_path)
+    WATCHED_PATHS[root_path] = handler
         
     try:
         if not observer.is_alive():
