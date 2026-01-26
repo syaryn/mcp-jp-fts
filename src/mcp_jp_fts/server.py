@@ -720,11 +720,18 @@ def get_index_stats() -> str:
     - watched_directories: List of directories currently being watched
     """
     stats = {
+        "version": "unknown",
         "total_files": 0,
         "total_size_bytes": 0,
         "last_scanned": None,
         "watched_directories": list(WATCHED_PATHS.keys())
     }
+
+    try:
+        from importlib.metadata import version
+        stats["version"] = version("mcp-jp-fts")
+    except Exception:
+        pass
     
     # DB stats
     if os.path.exists(DB_PATH):

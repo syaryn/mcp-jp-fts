@@ -637,6 +637,7 @@ def test_get_index_stats(temp_db, tmp_path):
         stats = json.loads(stats_json)
         assert stats["total_files"] == 0
         assert stats["watched_directories"] == []
+        assert "version" in stats
         
         # 2. Add some files
         f1 = tmp_path / "f1.txt"
