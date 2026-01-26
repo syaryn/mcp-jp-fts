@@ -57,17 +57,14 @@ def test_validate_path_security():
     safe_path = os.path.join(cwd, "safe.txt")
     assert server.validate_path(safe_path) == safe_path
 
-    # Outside CWD
+    # Outside CWD should now be ALLOWED
     unsafe_path = "/etc/passwd"
-    # Or relative
-    unsafe_rel = "../../outside.txt"
+    assert server.validate_path(unsafe_path) == os.path.abspath("/etc/passwd")
 
-    import pytest
-    with pytest.raises(ValueError, match="Access denied"):
-        server.validate_path(unsafe_path)
-    
-    with pytest.raises(ValueError, match="Access denied"):
-        server.validate_path(unsafe_rel)
+    # Relative paths resolve to absolute
+    unsafe_rel = "../../outside.txt"
+    expected = os.path.abspath(unsafe_rel)
+    assert server.validate_path(unsafe_rel) == expected
 
 
 def test_index_directory_clears_stale_data(temp_db, resource_dir):
