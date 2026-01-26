@@ -770,8 +770,14 @@ def get_index_stats() -> str:
             stats["db_integrity"] = str(e)
             
         # Get recently indexed files
-        recent_rows = conn.execute("SELECT path FROM documents_meta ORDER BY scanned_at DESC LIMIT 5").fetchall()
-        stats["recent_files"] = [r[0] for r in recent_rows]
+        recent_rows = conn.execute("SELECT path, scanned_at FROM documents_meta ORDER BY scanned_at DESC LIMIT 5").fetchall()
+        stats["recent_files"] = []
+        from datetime import datetime
+        for r in recent_rows:
+            entry = {"path": r[0]}
+            if r[1]:
+                entry["timestamp"] = datetime.fromtimestamp(r[1]).isoformat()
+            stats["recent_files"].append(entry)
             
     import json
     return json.dumps(stats, ensure_ascii=False, indent=2)
